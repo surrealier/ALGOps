@@ -1,0 +1,61 @@
+"""Generated skeleton — implement your project's evaluation here (ALGOps run-adapter).
+
+Contract: ``run(req, output_dir) -> RunResult``
+  1. effective params = defaults overridden by req.param_values
+  2. run the model + post-processing over req.test_set_uri using those params
+  3. emit one CSV per pipeline stage into output_dir (+ manifest.json) per the ALGOps convention
+  4. compute metrics vs ground truth
+  5. return RunResult (the slave/master schema-validate it)
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+
+from algops.contract import effective_params
+from algops.core import Metrics, RunRequest, RunResult, RunStatus
+
+_DIR = os.path.dirname(__file__)
+JOIN = ["run_id", "item_id", "frame_index", "entity_id", "stage"]
+
+
+def run(req: RunRequest, output_dir: str) -> RunResult:
+    os.makedirs(output_dir, exist_ok=True)
+    params = effective_params(_DIR, req.param_values)  # validated + clamped
+
+    # --- TODO: replace the stub below with your model + post-processing over the test set ---
+    # Iterate the test set, run inference + post-processing using `params`, and for each detection
+    # write rows to the per-stage CSVs (ai_inference, your postproc stages, decision) sharing the
+    # JOIN columns + a stable `entity_id`. Accumulate the confusion matrix vs ground truth.
+    tp = fp = fn = tn = 0
+    decision_rows: list[list] = []  # JOIN + ["dec_kept","dec_reason","dec_score","gt_match"]
+
+    if not decision_rows:
+        raise NotImplementedError(
+            "ALGOps run_adapter: implement model+postproc evaluation (see AGENTS.md Phase 2/3)"
+        )
+
+    decision_csv = os.path.join(output_dir, "decision.csv")
+    with open(decision_csv, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(JOIN + ["dec_kept", "dec_reason", "dec_score", "gt_match"])
+        w.writerows(decision_rows)
+
+    manifest = {
+        "run_id": req.run_id,
+        "param_values": req.param_values,
+        "n_items": len(decision_rows),
+        "stages": [{"stage": "decision", "csv": "decision.csv", "grain": "entity", "depends_on": []}],
+    }
+    manifest_path = os.path.join(output_dir, "manifest.json")
+    json.dump(manifest, open(manifest_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
+    return RunResult(
+        run_id=req.run_id,
+        status=RunStatus.evaluated,
+        metrics=Metrics.from_counts(tp=tp, fp=fp, fn=fn, tn=tn),
+        csv_manifest_uri=os.path.abspath(manifest_path),
+        n_items=len(decision_rows),
+    )

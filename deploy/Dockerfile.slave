@@ -1,0 +1,14 @@
+# ALGOps slave (per-project agent). Runs on each developer PC (B/C/D...). Outbound-only.
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir uv
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN uv sync --no-dev
+
+ENV ALGOPS_SLAVE_HOST=0.0.0.0
+# Mount the target project at /workspace/project and set ALGOPS_SLAVE_PROJECT_PATH to it (M4).
+# With no project path, the bundled toy detector is used (M0).
+CMD ["uv", "run", "algops-slave"]

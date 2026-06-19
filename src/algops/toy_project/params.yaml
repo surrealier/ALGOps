@@ -1,0 +1,27 @@
+# ALGOps externalized parameters (plan §2A).
+# This file is the GOLDEN REFERENCE for what the M4 coding-agent flow must produce for an
+# arbitrary project. For the bundled toy detector it was written by hand.
+meta:
+  algops_contract_version: "1.0"
+  project_id: "bundled-toy"
+  param_spec_version: 1
+  modality: tabular
+  generated_by: hand
+params:
+  - key: detector.confidence_threshold
+    dtype: float
+    default: 0.45
+    range: [0.05, 0.95]
+    step: 0.05
+    stage: decision
+    influence: { fp: high, fn: high }
+    unit: probability
+    description: "Minimum detector score to KEEP a detection. Higher → fewer FP, more FN."
+  - key: postproc.roundness.min
+    dtype: float
+    default: 0.0
+    range: [0.0, 1.0]
+    step: 0.05
+    stage: postproc_shape
+    influence: { fp: high, fn: medium }
+    description: "Minimum shape roundness to KEEP. Default 0.0 disables the filter (no-op)."

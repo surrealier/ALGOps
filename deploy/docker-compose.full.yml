@@ -1,0 +1,103 @@
+# ALGOps FULL production stack (M5) for server A — Postgres + Redis + MinIO + Qdrant + Neo4j +
+# a Celery worker + Traefik (TLS/auth). The experiment loop runs in the WORKER (dev_mode=false)
+# and talks to the API process over the Redis-backed command bus + progress channel.
+#
+#   docker compose -f deploy/docker-compose.full.yml up -d --build
+#   # UI behind Traefik:  https://<A_IP>/      (self-signed by default; see deploy/traefik/)
+#
+# Slaves on PCs B/C/D connect to https://<A_IP> (or http://<A_IP>:8000 if not using Traefik).
+
+x-master-env: &master-env
+  ALGOPS_MASTER_DEV_MODE: "false"
+  ALGOPS_MASTER_DB_URL: "postgresql+psycopg://algops:algops@postgres:5432/algops"
+  ALGOPS_MASTER_CHECKPOINT_BACKEND: "postgres"
+  ALGOPS_MASTER_COMMAND_BUS: "redis"
+  ALGOPS_MASTER_WS_BACKEND: "redis"
+  ALGOPS_MASTER_CELERY_BROKER_URL: "redis://redis:6379/0"
+  ALGOPS_MASTER_ARTIFACT_BACKEND: "s3"
+  ALGOPS_MASTER_S3_ENDPOINT: "http://minio:9000"
+  ALGOPS_MASTER_S3_BUCKET: "algops"
+  ALGOPS_MASTER_S3_ACCESS_KEY: "algops"
+  ALGOPS_MASTER_S3_SECRET_KEY: "algops-secret"
+  ALGOPS_MASTER_RAG_BACKEND: "qdrant_neo4j"
+  ALGOPS_MASTER_QDRANT_URL: "http://qdrant:6333"
+  ALGOPS_MASTER_NEO4J_URI: "bolt://neo4j:7687"
+  ALGOPS_MASTER_NEO4J_USER: "neo4j"
+  ALGOPS_MASTER_NEO4J_PASSWORD: "algops-neo4j"
+  ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-change-me}"
+  # LLM endpoint (M1) — point at vLLM/Ollama, or bring up deploy/docker-compose.llm.yml:
+  ALGOPS_MASTER_LLM__MODE: "${ALGOPS_LLM_MODE:-none}"
+  ALGOPS_MASTER_LLM__BASE_URL: "${ALGOPS_LLM_BASE_URL:-}"
+  ALGOPS_MASTER_LLM__MODEL: "${ALGOPS_LLM_MODEL:-}"
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+    ports: ["80:80", "443:443"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik:/etc/traefik/dynamic:ro
+    restart: unless-stopped
+
+  master-api:
+    build: { context: .., dockerfile: deploy/Dockerfile.master }
+    image: algops/master:0.0.0
+    environment: *master-env
+    depends_on: [postgres, redis, minio, qdrant, neo4j]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.algops.rule=PathPrefix(`/`)
+      - traefik.http.routers.algops.entrypoints=websecure
+      - traefik.http.routers.algops.tls=true
+      - traefik.http.routers.algops.middlewares=algops-auth@file
+      - traefik.http.services.algops.loadbalancer.server.port=8000
+    restart: unless-stopped
+
+  master-worker:
+    image: algops/master:0.0.0
+    command: ["uv", "run", "celery", "-A", "algops.master.celery_app:celery", "worker", "--loglevel=info"]
+    environment: *master-env
+    depends_on: [master-api, postgres, redis]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: algops, POSTGRES_PASSWORD: algops, POSTGRES_DB: algops }
+    volumes: ["pg:/var/lib/postgresql/data"]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: algops, MINIO_ROOT_PASSWORD: algops-secret }
+    volumes: ["minio:/data"]
+    ports: ["9001:9001"]
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant
+    volumes: ["qdrant:/qdrant/storage"]
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5
+    environment: { NEO4J_AUTH: "neo4j/algops-neo4j" }
+    volumes: ["neo4j:/data"]
+    restart: unless-stopped
+
+volumes:
+  pg: {}
+  minio: {}
+  qdrant: {}
+  neo4j: {}

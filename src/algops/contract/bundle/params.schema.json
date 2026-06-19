@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ALGOps params.yaml",
+  "type": "object",
+  "required": ["meta", "params"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["algops_contract_version", "modality"],
+      "properties": {
+        "algops_contract_version": { "type": "string" },
+        "project_id": { "type": "string" },
+        "param_spec_version": { "type": "integer", "minimum": 1 },
+        "modality": { "enum": ["video", "image", "audio", "tabular"] },
+        "generated_by": { "type": "string" }
+      }
+    },
+    "params": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "dtype", "default", "stage"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+            "description": "dotted, globally unique, IMMUTABLE"
+          },
+          "dtype": { "enum": ["float", "int", "bool", "enum"] },
+          "default": {},
+          "range": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "required for float/int"
+          },
+          "step": { "type": "number", "description": "search granularity; required for float/int" },
+          "enum": { "type": "array", "description": "required for dtype=enum" },
+          "stage": { "type": "string", "description": "must match a CSV stage id" },
+          "influence": {
+            "type": "object",
+            "properties": {
+              "fp": { "enum": ["high", "medium", "low", "none", "unknown"] },
+              "fn": { "enum": ["high", "medium", "low", "none", "unknown"] }
+            }
+          },
+          "unit": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "dtype": { "enum": ["float", "int"] } } },
+            "then": { "required": ["range", "step"] }
+          },
+          {
+            "if": { "properties": { "dtype": { "const": "enum" } } },
+            "then": { "required": ["enum"] }
+          }
+        ]
+      }
+    }
+  }
+}

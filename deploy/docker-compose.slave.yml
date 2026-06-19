@@ -1,0 +1,26 @@
+# ALGOps SLAVE — one per project, on a developer PC (B/C/D...). Outbound HTTP only.
+#
+#   ALGOPS_MASTER_URL=http://<A_IP>:8000 ALGOPS_PROJECT_NAME=proj-A \
+#     docker compose -f deploy/docker-compose.slave.yml up -d
+#
+# Set ALGOPS_PROJECT_DIR to your externalized project (M4); leave unset to use the bundled
+# toy detector (M0). The slave needs only OUTBOUND access to the master — no inbound ports.
+
+services:
+  slave:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.slave
+    image: algops/slave:0.0.0
+    environment:
+      ALGOPS_SLAVE_MASTER_URL: "${ALGOPS_MASTER_URL:-http://host.docker.internal:8000}"
+      ALGOPS_SLAVE_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-dev-enroll-token}"
+      ALGOPS_SLAVE_PROJECT_NAME: "${ALGOPS_PROJECT_NAME:-toy-project}"
+      ALGOPS_SLAVE_HOST_LABEL: "${HOSTNAME:-dev-pc}"
+      # Set to /workspace/project once the project is externalized (M4); empty => bundled toy.
+      ALGOPS_SLAVE_PROJECT_PATH: "${ALGOPS_SLAVE_PROJECT_PATH:-}"
+    volumes:
+      - "${ALGOPS_PROJECT_DIR:-./.placeholder}:/workspace/project:rw"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

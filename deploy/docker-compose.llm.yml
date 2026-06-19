@@ -1,0 +1,32 @@
+# Optional LLM endpoint (M1). Bring up a vLLM OpenAI-compatible server, then point the master at it:
+#   ALGOPS_MASTER_LLM__MODE=external
+#   ALGOPS_MASTER_LLM__BASE_URL=http://<llm_host>:8001/v1
+#   ALGOPS_MASTER_LLM__MODEL=Qwen/Qwen3-8B-Instruct
+#
+#   docker compose -f deploy/docker-compose.llm.yml up -d
+#
+# Requires an NVIDIA GPU + NVIDIA Container Toolkit. Ollama is an alternative (also /v1):
+#   ollama serve  ->  ALGOPS_MASTER_LLM__BASE_URL=http://<host>:11434/v1
+
+services:
+  vllm-chat:
+    image: vllm/vllm-openai:latest
+    command: >
+      --model Qwen/Qwen3-8B-Instruct
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
+      --port 8001
+      --gpu-memory-utilization 0.85
+    ports:
+      - "8001:8001"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf_cache: {}

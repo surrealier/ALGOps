@@ -1,0 +1,33 @@
+# One-command local demo: master + one toy slave on the same Docker network.
+#
+#   docker compose -f deploy/docker-compose.dev.yml up --build
+#   # then open http://localhost:8000  ->  toy-project appears online  ->  create + run an experiment
+
+services:
+  master:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.master
+    ports:
+      - "8000:8000"
+    environment:
+      ALGOPS_MASTER_DEV_MODE: "true"
+      ALGOPS_MASTER_DB_URL: "sqlite+pysqlite:////data/tracking.sqlite"
+      ALGOPS_MASTER_ARTIFACT_DIR: "/data/artifacts"
+      ALGOPS_MASTER_CHECKPOINT_DB: "/data/checkpoints.sqlite"
+      ALGOPS_MASTER_ENROLL_TOKEN: "dev-enroll-token"
+    volumes:
+      - algops_dev:/data
+
+  slave:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.slave
+    depends_on: [master]
+    environment:
+      ALGOPS_SLAVE_MASTER_URL: "http://master:8000"
+      ALGOPS_SLAVE_ENROLL_TOKEN: "dev-enroll-token"
+      ALGOPS_SLAVE_PROJECT_NAME: "toy-project"
+
+volumes:
+  algops_dev: {}

@@ -1,0 +1,19 @@
+# Traefik dynamic config: TLS (self-signed default) + Basic Auth for the master UI/API.
+#
+# Generate a real cert for your intranet host and mount it, or keep Traefik's default
+# self-signed cert for a closed network. Replace the basic-auth user (htpasswd -nbB user pass).
+tls:
+  # Provide your own cert for a named host; otherwise Traefik serves a self-signed cert.
+  # certificates:
+  #   - certFile: /etc/traefik/dynamic/algops.crt
+  #     keyFile: /etc/traefik/dynamic/algops.key
+
+http:
+  middlewares:
+    algops-auth:
+      basicAuth:
+        # Default user 'algops' / password 'algops' — CHANGE THIS for production.
+        # Generate: htpasswd -nbB <user> <pass>   (bcrypt recommended)
+        users:
+          - "algops:{SHA}vRHAqp4du2ybJLua8K0Jy/PXdFw="
+        removeHeader: true

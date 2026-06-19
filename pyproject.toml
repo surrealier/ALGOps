@@ -1,0 +1,90 @@
+[project]
+name = "algops"
+version = "0.0.0"
+description = "ALGOps — RAG-based MLOps for optimizing post-processing algorithm parameters (M0 walking skeleton)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # contracts / config
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    # tracking
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    # services
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    # agents / langgraph
+    "langgraph>=0.2",
+    "langgraph-checkpoint-sqlite>=1.0",
+    "aiosqlite>=0.20",
+    # extraction
+    "pandas>=2.2",
+    # notify (light)
+    "slack-sdk>=3.27",
+    # task runtime (broker only needed in prod; dev uses BackgroundTasks)
+    "celery>=5.3",
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+# Installed on the master server (host A) for the production stack.
+prod = [
+    "psycopg[binary]>=3.1",
+    "langgraph-checkpoint-postgres>=2.0",
+    "gunicorn>=21.2",
+]
+# M1: OpenAI-compatible LLM client (vLLM / Ollama).
+llm = [
+    "langchain-openai>=0.2",
+]
+# M3: hybrid RAG stores (Qdrant + Neo4j). Embedder/reranker models are a further opt-in.
+rag = [
+    "qdrant-client>=1.12",
+    "neo4j>=5.20",
+]
+# M3 optional: local embedding + reranking models (heavier — onnxruntime / torch).
+rag-models = [
+    "fastembed>=0.4",
+]
+# M5 optional: S3/MinIO artifact backend + MCP-authored notifications.
+cloud = [
+    "boto3>=1.34",
+]
+mcp = [
+    "langchain-mcp-adapters>=0.1",
+]
+
+[project.scripts]
+algops-master = "algops.master.__main__:main"
+algops-slave = "algops.slave.__main__:main"
+algops-smoke = "algops.smoke:main"
+algops-init-contract = "algops.contract.cli:cmd_init_contract"
+algops-introspect = "algops.contract.cli:cmd_introspect"
+algops-verify = "algops.contract.cli:cmd_verify"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/algops"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/algops/toy_project/params.yaml" = "algops/toy_project/params.yaml"
+"src/algops/master/static" = "algops/master/static"
+"src/algops/contract/bundle" = "algops/contract/bundle"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]

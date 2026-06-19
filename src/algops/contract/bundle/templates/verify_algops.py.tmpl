@@ -1,0 +1,25 @@
+"""ALGOps externalization gate. Run before declaring the refactor done:
+
+    python algops/verify_algops.py .
+
+Exit 0 = the project conforms (params load + run_adapter returns a valid RunResult). A Claude Code
+post-edit hook should run this and require exit 0.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from algops.contract.verify import run_gate
+
+
+def main() -> int:
+    project_root = sys.argv[1] if len(sys.argv) > 1 else "."
+    strict = "--strict" in sys.argv
+    result = run_gate(project_root, algops_dir="algops", strict=strict)
+    print(result.render())
+    return 0 if result.ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

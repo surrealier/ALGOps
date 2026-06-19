@@ -1,0 +1,54 @@
+# ALGOps MASTER — deploy on server A (fixed IP). Slaves on PCs B/C/D connect to it.
+#
+#   docker compose -f deploy/docker-compose.master.yml up -d
+#   # UI:  http://<A_IP>:8000
+#
+# M0 runs the experiment loop IN-PROCESS (dev_mode=true) with SQLite tracking + local
+# artifacts on a named volume — fully functional, no external services required.
+# The commented services below are the production topology wired in M3 (Qdrant/Neo4j),
+# M1 (vLLM), and M5 (Postgres/Redis/MinIO/Traefik).
+
+services:
+  master:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.master
+    image: algops/master:0.0.0
+    ports:
+      - "8000:8000"
+    environment:
+      ALGOPS_MASTER_DEV_MODE: "true"
+      ALGOPS_MASTER_DB_URL: "sqlite+pysqlite:////data/tracking.sqlite"
+      ALGOPS_MASTER_ARTIFACT_DIR: "/data/artifacts"
+      ALGOPS_MASTER_CHECKPOINT_DB: "/data/checkpoints.sqlite"
+      ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-dev-enroll-token}"
+      # Deterministic notifications (optional). Empty => console log only.
+      ALGOPS_MASTER_SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN:-}"
+      ALGOPS_MASTER_SLACK_CHANNEL: "${SLACK_CHANNEL:-}"
+      ALGOPS_MASTER_SMTP_HOST: "${SMTP_HOST:-}"
+      ALGOPS_MASTER_NOTIFY_EMAIL_TO: "${NOTIFY_EMAIL_TO:-}"
+    volumes:
+      - algops_data:/data
+    restart: unless-stopped
+
+  # --- Production services (enable as milestones land) -----------------------------------
+  # postgres:   # M5 — tracking DB + LangGraph AsyncPostgresSaver checkpoints
+  #   image: postgres:16
+  #   environment: { POSTGRES_USER: algops, POSTGRES_PASSWORD: algops, POSTGRES_DB: algops }
+  #   volumes: [ pg:/var/lib/postgresql/data ]
+  # redis:      # M5 — Celery broker + WS pub/sub (cross-process command bus)
+  #   image: redis:7
+  # minio:      # M5 — S3 artifact store (proxied-artifact mode)
+  #   image: minio/minio
+  #   command: server /data --console-address ":9001"
+  # qdrant:     # M3 — vector DB (run-report RAG)
+  #   image: qdrant/qdrant
+  # neo4j:      # M3 — graph DB (params / influence / lineage)
+  #   image: neo4j:5
+  # vllm-chat:  # M1 — OpenAI-compatible agent LLM (Qwen3, --tool-call-parser hermes)
+  #   image: vllm/vllm-openai:latest
+  #   deploy: { resources: { reservations: { devices: [{ capabilities: [gpu] }] } } }
+
+volumes:
+  algops_data: {}
+  # pg: {}
