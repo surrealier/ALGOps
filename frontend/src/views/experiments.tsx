@@ -225,7 +225,8 @@ function Promotion({ e, final, reload }: { e: Experiment; final: FinalResult; re
 export function ExperimentDetail({ id }: { id: string }) {
   const e = useAsync(() => api.experiment(id), [id]);
   const runs = useAsync(() => api.runs(id), [id]);
-  const final = useAsync(() => api.final(id).catch(() => null), [id]);
+  const status = e.data?.status;
+  const final = useAsync(() => (status && TERMINAL.includes(status) ? api.final(id).catch(() => null) : Promise.resolve(null)), [id, status]);
   const iters = useAsync(() => fetch(`/api/v1/experiments/${id}/iterations`).then((r) => r.json()) as Promise<any[]>, [id]);
   const [approval, setApproval] = useState<any>(null);
   const [report, setReport] = useState(false);
