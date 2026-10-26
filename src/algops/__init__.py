@@ -12,4 +12,4 @@ M0 walking skeleton. Logical packages live as subpackages here:
     algops.toy_project  # bundled hand-externalized synthetic detector
 """
 
-__version__ = "0.0.0"
+__version__ = "0.2.0"

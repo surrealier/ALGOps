@@ -46,4 +46,5 @@ def test_uuid7_format():
 def test_runresult_roundtrip():
     r = RunResult(run_id="r", status=RunStatus.evaluated, metrics=Metrics.from_counts(1, 0, 0, 1), n_items=2)
     again = RunResult(**r.model_dump())
-    assert again.status is RunStatus.evaluated and again.metrics.tp == 1
+    assert again.status is RunStatus.evaluated and again.metrics["tp"] == 1
+    assert again.metrics["precision"] == 1.0  # Metrics models normalize to a {name: float} dict

@@ -2,303 +2,219 @@
 
 # ⚙️ ALGOps
 
-**RAG-based Algorithm Ops — let multi-agents tune your post-processing algorithm.**
+**Test, benchmark and tune every algorithm in every repository — in any language.**
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-20232A?logo=react&logoColor=61DAFB)](https://react.dev/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-RAG-DC244C?logo=qdrant&logoColor=white)](https://qdrant.tech/)
-[![Neo4j](https://img.shields.io/badge/Neo4j-graph-008CC1?logo=neo4j&logoColor=white)](https://neo4j.com/)
-![tests](https://img.shields.io/badge/tests-35%20passing-3fb950)
-![status](https://img.shields.io/badge/milestones-M0–M5%20✓-4f9cf9)
+![contract](https://img.shields.io/badge/contract-v2-4f9cf9)
+![tests](https://img.shields.io/badge/tests-113%20passing-3fb950)
 
-[Quick Start](#-quick-start) · [How It Works](#️-how-it-works) · [The Loop](#-the-optimization-loop) · [Externalization](#-parameter-externalization-the-novel-core) · [Deployment](#-deployment) · [Roadmap](#️-roadmap)
+[Why](#-why) · [Quick start](#-quick-start) · [Onboard a repo](#-onboard-a-repository) · [Benchmarks](#-benchmarks--regressions) · [Campaigns](#-optimization-campaigns) · [Deploy](#-deployment) · [Docs](#-docs)
 
 <br/>
 
-<img src="docs/screenshots/02-experiment.png" width="900" alt="ALGOps dashboard — an experiment optimizing a detector's false-positive rate" />
+<img src="docs/screenshots/benchmark-matrix.png" width="900" alt="Benchmark matrix: every project × algorithm × suite with gate and regression verdicts" />
 
-<sub>An experiment driving a detector's false-positive rate from 0.329 → 0.043 by searching its post-processing parameters. (UI is Korean — this is an on-prem tool for a Korean team.)</sub>
+<sub>A benchmark across three repositories (Python, C, and the bundled toy). A commit that lowered a threshold shows up as a regression on one suite and a failed gate on another. (UI is Korean — an on-prem tool for a Korean team.)</sub>
 
 </div>
 
 ---
 
-## 💡 What is ALGOps?
+## 💡 Why
 
-Classic MLOps (MLflow, W&B) tracks **training hyper-parameters → model performance**.
+Classic MLOps tracks *training hyper-parameters → model quality*. ALGOps works on the layer around
+the model — the **post-processing and decision algorithms** (thresholds, shape filters, debouncing,
+smoothing windows, NMS modes …) that teams tune by hand, scattered across many repositories and
+languages.
 
-**ALGOps tracks the layer on top of the model** — the *post-processing algorithm parameters* that
-wrap an AI model's raw output (confidence thresholds, shape/roundness filters, HSV/histogram
-windowing, NMS modes, temporal smoothing …) — and **searches them automatically** with a team of
-LLM agents and a RAG memory of past experiments.
+ALGOps gives all of them one contract and one engine:
 
-You point an AI coding agent at your repo with *"install this and run ALGOps"*. Guided by a shipped
-contract, it externalizes every scattered post-processing constant into one validated
-`params.yaml`, then registers your project. From a web page you set a free-text goal
-(e.g. *"reduce false positives"*), a target metric, and a max-iteration budget, and press **Run**.
-A **LangGraph supervisor loop (PM → Analyst → Developer)** then proposes a parameter change,
-evaluates it over your test set, analyzes the telemetry, consults what worked in past experiments,
-and repeats — until the target is hit, the PM stops early, or the budget runs out. Every run is
-tracked, reported, and remembered.
+- **Any language.** An algorithm is any program that reads `request.json` and writes `result.json`.
+  Python gets a zero-dependency SDK; C, Go, Rust, MATLAB or a shell script work as-is.
+- **Every algorithm × every test suite.** One `algops.yaml` per repository declares *N* algorithms,
+  *M* suites, their parameters, metrics, gates and objectives.
+- **Git is the source of truth.** Every run is pinned to a commit. Defaults live in the repo; the
+  best parameters found are *proposed* back as a branch commit / PR — never applied silently.
+- **Parameters only.** Agents explore the declared parameter space. Code is never modified.
+- **Verdicts in code, not in the LLM.** Gates, regressions, stop conditions and notifications are
+  deterministic; LLM agents only propose, analyze and summarize.
 
-```
-┌── classic MLOps ──────────────┐      ┌── ALGOps ─────────────────────────────────┐
-│ training params → model perf  │  vs  │ post-processing params → optimal values    │
-│ you tune + log manually       │      │ multi-agents + RAG tune them for you        │
-└───────────────────────────────┘      └─────────────────────────────────────────────┘
-```
+## ✨ What you get
 
-> **Status: M0–M5 implemented.** Master/Slave + checkpointed LangGraph loop, multi-stage CSV
-> telemetry, cross-experiment RAG memory, LLM agents, the coding-agent externalization contract,
-> human-in-the-loop approval, and a full production stack. The **dev path runs with no external
-> services or GPU** (in-memory RAG, SQLite, in-process loop, deterministic agents); production
-> integrations switch on by config.
+| | |
+| --- | --- |
+| 🧪 **Benchmarks** | Run the full project × algorithm × suite matrix at pinned commits. Each cell: **absolute gates** (`recall >= 0.85`) then **baseline comparison** with tolerance → `passed / improved / regressed / gate_failed / error`. Regressions keep failing until fixed or explicitly accepted. |
+| 🎯 **Campaigns** | Multi-parameter search (coordinate / random / grid) with **constraints** (*minimize fp_rate s.t. recall ≥ 0.9*), parallel **batches**, held-out **validation suites** to catch over-fitting, optional LLM planner + RAG memory, human-in-the-loop approval. |
+| 🌿 **Promotion** | One click writes the winning defaults on a new branch at the campaign's commit — byte-minimal, comment-preserving diff — pushes it, and opens a GitHub/GitLab PR. |
+| 🛰️ **Runners** | Outbound-only workers on any machine (NAT friendly). Each serves many repos: git mirror + per-commit worktrees, cached `env.setup`, labels (`gpu`, `cuda12`), concurrency, re-dispatch when a runner dies. |
+| ⏰ **Triggers** | UI, cron schedules, **git watch** (new commit on the default branch → benchmark), `algops ci` for any CI system, and `algops test` inside the repo itself (no master needed). |
+| 📊 **Telemetry** | Per-stage CSVs joined on an `entity_id` spine; the master recomputes the confusion matrix independently and attributes drops to parameters. |
 
----
+## 🚀 Quick start
 
-## ✨ Features
-
-- 🧭 **Web-based, MLflow-like** — deploy once, browse projects / experiments / runs / live progress.
-- 🛰️ **Master / Slave over your intranet** — one master on a server; one slave per project on dev
-  PCs. Slaves are **outbound-only** (zero inbound ports — NAT/firewall friendly).
-- 🤖 **Three-agent loop (PM · Analyst · Developer)** on LangGraph, with checkpointed resume and a
-  router that *enforces* the iteration cap & target (an agent can never talk past them).
-- 🧠 **RAG that learns across experiments** — each run's report → Qdrant; params, their FP/FN
-  influence, and run lineage → Neo4j. "What lowered false positives last time?" is a query.
-- 🔌 **Coding-agent externalization contract** — `AGENTS.md` / `CLAUDE.md` + a JSON Schema + an
-  **executable verify gate** (behavior-preserving, not "the file exists").
-- 📊 **Multi-stage telemetry** — one CSV per pipeline stage, joined on a stable `entity_id` spine,
-  aggregated deterministically (no LLM code-execution / no RCE).
-- 🔀 **Any OpenAI-compatible LLM** — vLLM (default) or Ollama; the same config struct, with a
-  deterministic fallback so a flaky open model never crashes a campaign.
-- 🙋 **Human-in-the-loop** — optionally pause for approval before each code change.
-- 🔔 **Deterministic notifications** — Slack / email / console on completion (never via the LLM).
-
----
-
-## 🏗️ How It Works
-
-**Topology** — a durable master (server A) drives the loop; ephemeral slaves (dev PCs) own the code
-and the test-set evaluation and only ever call *out* to the master.
-
-```mermaid
-flowchart LR
-  B["🌐 Browser"] -- WebSocket --> API
-  subgraph MASTER["MASTER · server A"]
-    API["FastAPI + React UI"]
-    LOOP["LangGraph loop<br/>PM · Analyst · Developer"]
-    STORES["Qdrant + Neo4j<br/>Postgres · MinIO"]
-    LLM["vLLM / Ollama"]
-    API --- LOOP
-    LOOP --- STORES
-    LOOP --- LLM
-  end
-  subgraph PCS["SLAVES · dev PCs B / C / D"]
-    SL["Slave<br/>run_adapter + project code"]
-  end
-  SL -. "register · long-poll · upload (outbound only)" .-> API
-```
-
-**One run = one parameter-set evaluation.** The master mints a `run_id`, the slave evaluates it over
-the test set and streams per-stage telemetry back. That `run_id` is the integrity spine across the
-tracking DB, the CSVs, the vector store, and the graph.
-
----
-
-## 🚀 Quick Start
-
-No Docker, no GPU required for the dev path.
+No Docker, no GPU.
 
 ```bash
-uv sync                 # virtualenv + dependencies
-uv run algops-smoke     # in-process end-to-end demo (toy detector, SQLite, in-memory RAG)
-uv run pytest           # 35 tests
+uv sync
+uv run pytest                                   # 113 tests, no external services
+
+uv run algops test examples/py-multi-algo       # 2 algorithms × 2 suites each, gates applied
+uv run algops test examples/c-threshold         # a C program compiled by env.setup
 ```
 
-Run the distributed flow locally (master + a slave, as in production):
+Run the platform locally (master + a runner):
 
 ```bash
-# terminal 1 — master (serves the React UI)
-uv run algops-master                         # http://127.0.0.1:8000
-
-# terminal 2 — slave (bundled toy project)
-ALGOPS_SLAVE_MASTER_URL=http://127.0.0.1:8000 uv run algops-slave
+uv run algops master                                              # http://127.0.0.1:8000
+ALGOPS_SLAVE_MASTER_URL=http://127.0.0.1:8000 uv run algops slave  # serves the bundled toy project
 ```
 
-Open **http://127.0.0.1:8000** → the `toy-project` appears **online** → create an experiment
-(goal, target metric, max iterations) → **Run** → watch iterations stream in and the final result
-land.
+Open the UI → **프로젝트** → register any git URL the runner can clone → **▶ 벤치마크**.
 
-### 🐳 Docker
+## 🔌 Onboard a repository
 
 ```bash
-docker compose -f deploy/docker-compose.dev.yml up --build      # master + toy slave, one command
+cd your-repo
+algops init -a detector            # algops.yaml + params + entrypoint + sample suite + AGENTS.md
+algops validate                    # static checks
+algops run -a detector -s smoke --set detector.confidence_threshold=0.6
+algops verify                      # every algorithm runs with its defaults — must exit 0
+algops test --json baseline.json   # the full matrix + gates; later: --baseline baseline.json
 ```
 
----
-
-## 🔁 The Optimization Loop
-
-A LangGraph `StateGraph`. In M0 the agents are deterministic stubs (a single-parameter hill-climb);
-from M1 the PM / Analyst / summarizer are real LLM agents behind the same node boundaries.
-
-```mermaid
-flowchart LR
-  S((start)) --> R[rag_retrieve] --> P[pm_propose] --> D[developer] --> E[run_eval]
-  E --> X[extract_csv] --> Z[pandas_summarize] --> A[analyst] --> PM{pm_decide}
-  PM -- continue --> R
-  PM -- "stop · max_iter · target_reached" --> F[finalize] --> EN((end))
-```
-
-- **Stop is enforced in the router**, not the agent: `pm_action == stop` **OR** `iteration >= max`
-  **OR** `target_reached`. The checkpointer keys on `thread_id = experiment_id`, so a worker
-  restart resumes a campaign mid-flight.
-- **`finalize`** writes the run report to Qdrant, upserts the graph in Neo4j, registers the optimal
-  parameter set, and fires the deterministic notification.
-
-<div align="center">
-<img src="docs/screenshots/03-detail.png" width="780" alt="Iteration table + final result" />
-<br/><sub>Live iteration table and the final optimal parameter set.</sub>
-</div>
-
----
-
-## 🔌 Parameter Externalization (the novel core)
-
-The entry point is: **give an AI coding agent (Claude Code / Codex) this repo's link and your
-project**. It ships a deterministic contract and refactors your project — *without changing
-behavior* — so ALGOps can sweep its parameters.
-
-```bash
-algops-init-contract .     # drop AGENTS.md / CLAUDE.md / params.schema.json + templates
-algops-introspect .        # scan for hardcoded constants -> algops/UNDERSTANDING.md
-# ... the coding agent writes algops/params.yaml + run_adapter.py ...
-algops-verify .            # executable gate — must exit 0
-```
-
-Every parameter becomes a fully-specified object (so the PM can reason about it and the graph can
-store it):
+Or hand the repository to a coding agent (Claude Code / Codex): `algops init` ships an
+[`AGENTS.md`](src/algops/contract/bundle/AGENTS.md) / `CLAUDE.md` contract that tells it how to
+externalize hard-coded constants **without changing behavior**, gated by `algops verify`.
 
 ```yaml
-params:
-  - key: detector.confidence_threshold   # dotted, globally unique, IMMUTABLE
-    dtype: float
-    default: 0.45
-    range: [0.05, 0.95]
-    step: 0.05
-    stage: decision                      # must match a CSV stage id
-    influence: { fp: high, fn: high }    # a-priori FP/FN influence
+# algops.yaml
+algops: 2
+env:
+  setup: ["make build"]                       # once per commit, cached by the runner
+suites:
+  - { id: smoke, uri: data/smoke, tags: [fast] }
+  - { id: full,  uri: "${DATASETS}/vision/full" }   # expanded on each runner host
+algorithms:
+  - id: detector
+    params: algops/detector/params.yaml
+    entrypoint: { command: ["./build/eval"] }       # or { python: "algops/detector/run.py:run" }
+    metrics:    { presets: [binary], declare: [{ name: latency_ms, direction: minimize }] }
+    gates:      [{ metric: recall, op: ">=", value: 0.85 }]
+    objective:  { metric: fp_rate, target: 0.05, constraints: [{ metric: recall, op: ">=", value: 0.85 }] }
+    runs_on:    [gpu]
 ```
 
-The **verify gate checks behavior, not file existence**: params validate against the schema, the
-loader imports cleanly, and `run_adapter.run()` returns a schema-valid result on a self-check —
-enforce it with a Claude Code post-edit hook so the agent can't declare success otherwise.
+The program reads its parameters from `ALGOPS_PARAM_<KEY>`, `$ALGOPS_PARAMS_FILE` or
+`$ALGOPS_REQUEST`, the suite from `ALGOPS_SUITE_PATH`, and writes
+`{"status":"ok","metrics":{…},"counts":{"tp":…}}` to `$ALGOPS_RESULT`.
+Full reference (Korean): **[docs/contract-v2.md](docs/contract-v2.md)**.
 
----
+## 🧪 Benchmarks & regressions
 
-## 🧠 Experiment Memory (RAG)
-
-Experiments reference each other. *exp-a* has many misses → *exp-b* lowers the threshold → now too
-many false positives → *exp-c* should recall the *a→b* lineage and what actually helped.
-
-- **Qdrant** — each run's LLM/deterministic report is a chunked document (dense + sparse hybrid).
-- **Neo4j** — `(:Run)-[:CHANGED]->(:Parameter)-[:INFLUENCES]->(:Metric)` + `DERIVED_FROM` lineage.
-  `INFLUENCES.importance` is seeded from a-priori tags and **refined empirically** from observed
-  metric deltas — this is the knowledge that makes later campaigns smarter.
-- **Dev fallback** — an `InMemoryRagStore` gives the same retrieval + learned-influence behavior
-  with zero external services (used by the tests).
-
----
-
-## 🤖 LLM Backends
-
-Everything reaches the model through the OpenAI-compatible `/v1` API, so *external vLLM*,
-*external Ollama*, and *master-spun vLLM* are one config struct:
-
-```bash
-ALGOPS_MASTER_LLM__MODE=external
-ALGOPS_MASTER_LLM__BASE_URL=http://<vllm-or-ollama>:8001/v1
-ALGOPS_MASTER_LLM__MODEL=Qwen/Qwen3-8B-Instruct
+```text
+sync each repo (ref → sha, manifest) → expand cells → dispatch in parallel across runners
+  → per cell: gates, then compare to the last accepted result → verdict → summary + notification
 ```
 
-vLLM is the default (enforced schema-valid output + can also serve the reranker); Ollama is the
-small-GPU / dev fallback. `deploy/docker-compose.llm.yml` brings up a vLLM server.
+<div align="center">
+<img src="docs/screenshots/cell-detail.png" width="620" alt="Cell detail: gates, baseline deltas with tolerance, metrics, report and log" />
+</div>
 
----
+- **Baseline** = the most recent *accepted* evaluation of the same cell (passed/improved, or a cell
+  a human accepted as an intentional trade-off).
+- **Tolerance** = `max(abs_tolerance[metric], rel_tolerance × |baseline|)`, per algorithm.
+- `algops ci --master … --project vision --ref $SHA` blocks a merge on the master's verdict;
+  `algops test --baseline main.json` does the same with no master at all.
 
-## 📁 Project Structure
+## 🎯 Optimization campaigns
+
+<div align="center">
+<img src="docs/screenshots/campaign.png" width="820" alt="Campaign: best-so-far chart with constraint-violating runs hollow, and the run table" />
+</div>
+
+A LangGraph supervisor loop pinned to one commit:
+
+```mermaid
+flowchart LR
+  S((start)) --> R[rag_retrieve] --> P[pm_propose] --> D[developer · HITL] --> E[run_eval · batch]
+  E --> X[extract_csv] --> Z[summarize] --> A[analyst] --> PM{pm_decide}
+  PM -- continue --> R
+  PM -- "stop · max_iter · target" --> V[validate · held-out] --> F[finalize] --> EN((end))
+```
+
+- Iteration 1 always evaluates the repository's current defaults.
+- Ranking is **feasibility first**, then constraint violation, then the objective.
+- The router enforces `max_iteration` and the target — an agent cannot talk past them.
+- `validate` re-runs the winner *and* the defaults on held-out suites and flags over-fitting.
+- Every re-run is a new **attempt** with a clean checkpoint thread.
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+  B["🌐 Browser / CI"] -- REST · WS --> API
+  subgraph MASTER["MASTER"]
+    API["FastAPI + React UI<br/>scheduler"]
+    SVC["benchmarks · campaigns<br/>dispatcher · promotion"]
+    STORES["Postgres · MinIO<br/>Qdrant + Neo4j"]
+    API --- SVC --- STORES
+  end
+  subgraph RUNNERS["RUNNERS (any number)"]
+    R1["build box · cpu ×4"]
+    R2["gpu box · gpu ×2"]
+  end
+  R1 -. "register · long-poll · upload (outbound only)" .-> API
+  R2 -. "…" .-> API
+  R1 --- G[(git repos)]
+  R2 --- G
+```
 
 ```
 src/algops/
-  core/         contracts: ids, enums, params, schemas, config (single source of truth)
-  tracking/     SQLAlchemy models · session · artifact store · repositories
-  extraction/   metric scoring · target checks · multi-stage CSV aggregation
-  notify/       deterministic Slack / email / console (+ optional MCP)
-  agents/       LangGraph loop (state · nodes · graph · executor · hooks)
-  llm/          OpenAI-compatible client + LLM planner (PM/Analyst/summary)
-  rag/          RagStore: in-memory (dev) + Qdrant/Neo4j (prod) + embed/rerank
-  contract/     externalization bundle (AGENTS.md/CLAUDE.md/schema/templates) + verify gate
-  master/       FastAPI control plane + experiment-loop worker + command bus + WS
-  slave/        per-project agent: register · long-poll · run · upload (outbound only)
-  toy_project/  bundled hand-externalized synthetic detector (the golden reference)
-frontend/       React + TS + Vite Korean UI  (master serves the built dist at "/")
-deploy/         Dockerfiles + docker-compose.{dev,master,slave,full,llm}.yml + traefik/
-docs/           architecture.md · master-slave-protocol.md · deployment.md
+  core/        contract: manifest, metrics/objectives, params, wire schemas, settings
+  sdk/         zero-dependency Python SDK (algops_sdk.py), injected into every run
+  runner/      run protocol, git workspaces, env setup, promotion, local `algops test`
+  slave/       the runner process (register · heartbeat · workers · uploads)
+  search/      deterministic strategies (coordinate · random · grid)
+  agents/      LangGraph campaign loop
+  extraction/  telemetry aggregation, reports, verdicts
+  master/      API, dispatcher, command bus, services (benchmarks · campaigns · promotion · scheduler)
+  tracking/    ORM, repositories, artifact stores   (+ alembic/ migrations)
+  rag/ llm/ notify/   cross-experiment memory, LLM planner, deterministic notifications
+frontend/      React + TS + Vite UI → built into src/algops/master/static/ui
+examples/      py-multi-algo (Python, 2 algorithms), c-threshold (C)
 ```
-
----
 
 ## 🚢 Deployment
 
-On-prem / intranet, multi-host. Master on a fixed-IP server; slaves on dev PCs connecting in.
-
 ```bash
-# server A — full production stack (Postgres + Redis + MinIO + Qdrant + Neo4j + Celery + Traefik)
-ALGOPS_ENROLL_TOKEN=<secret> docker compose -f deploy/docker-compose.full.yml up -d --build
-# UI behind Traefik:  https://<A_IP>/
+# server A — Postgres + Redis + MinIO + Qdrant + Neo4j + Celery + Traefik
+ALGOPS_ENROLL_TOKEN=<secret> ALGOPS_API_TOKEN=<secret> \
+  docker compose -f deploy/docker-compose.full.yml up -d --build
 
-# each dev PC — one slave per project (outbound HTTP only)
-ALGOPS_MASTER_URL=http://<A_IP>:8000 ALGOPS_PROJECT_NAME=proj-A \
+# any machine that should execute runs (outbound HTTP only)
+ALGOPS_MASTER_URL=http://<A_IP>:8000 ALGOPS_ENROLL_TOKEN=<secret> \
+ALGOPS_RUNNER_LABELS=gpu,cuda12 ALGOPS_RUNNER_CONCURRENCY=2 \
   docker compose -f deploy/docker-compose.slave.yml up -d
 ```
 
-In production the loop runs in a **Celery worker** (`dev_mode=false`) and talks to the API over a
-Redis-backed command bus; durability is the **Postgres checkpoint**. Full details + GPU placement:
+Details (runner settings, datasets, private repos, PR providers, migrations):
 **[docs/deployment.md](docs/deployment.md)**.
 
----
+## 📚 Docs
 
-## 🧪 Testing
+Detailed docs are in Korean (the team's working language):
 
-```bash
-uv run pytest             # 35 tests, ~15s, no external services
-```
-
-Covers contracts, scoring & router stop-conditions, the toy adapter (golden + determinism +
-CSV↔metrics agreement), the full loop, **checkpoint resume**, **the real distributed master+slave
-e2e**, the LLM-planner branch + fallback, RAG retrieval + cross-experiment memory, the
-externalization gate, and the HITL approval gate.
-
----
-
-## 🗺️ Roadmap
-
-| Milestone | Scope | Status |
-|---|---|---|
-| **M0** | Master/Slave + checkpointed loop + CSV/metrics + notify, end-to-end | ✅ |
-| **M1** | OpenAI-compatible LLM client + LLM planner (deterministic fallback) | ✅ |
-| **M2** | Full multi-stage CSV convention + deterministic aggregation/sensitivity | ✅ |
-| **M3** | Qdrant + Neo4j hybrid RAG (in-memory fallback) — cross-experiment memory | ✅ |
-| **M4** | Coding-agent externalization contract + executable verify gate | ✅ |
-| **M5** | S3/MinIO · Postgres · Redis bus · Celery · Traefik · React UI · HITL · MCP | ✅ |
-| next | Worktree code-mutation for arbitrary repos · richer lineage UI · BFCL-tuned agents | ⏳ |
-
----
+- [docs/contract-v2.md](docs/contract-v2.md) — `algops.yaml`, the run protocol, the SDK, telemetry, CLI
+- [docs/architecture.md](docs/architecture.md) — principles, dispatch, benchmarks, the campaign loop, promotion
+- [docs/master-slave-protocol.md](docs/master-slave-protocol.md) — runner protocol + REST API
+- [docs/deployment.md](docs/deployment.md) — dev, Docker, production, runners, CI
 
 ## 📜 License
 
 Not yet specified — please open an issue or contact the maintainer before reuse.
 
-<div align="center"><sub>Built with FastAPI · LangGraph · Qdrant · Neo4j · React. 🤖 Co-developed with Claude.</sub></div>
+<div align="center"><sub>Built with FastAPI · LangGraph · React. 🤖 Co-developed with Claude.</sub></div>

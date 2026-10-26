@@ -1,0 +1,20 @@
+# Bundled toy detector — the zero-config demo project every runner serves by default.
+# It is also the golden reference of a contract-v2 manifest wrapping a v1 run-adapter.
+algops: 2
+name: toy-project
+suites:
+  - id: default
+    uri: "bundled://toy"          # the fixture is generated in-process (deterministic, CPU-only)
+    description: 280 synthetic detections (140 targets / 140 distractors)
+algorithms:
+  - id: default
+    description: Synthetic detector + confidence/roundness post-processing filters
+    params: params.yaml
+    entrypoint:
+      python: "algops.toy_project.run_adapter:run"   # v1 adapter: run(req, output_dir)
+    metrics: { presets: [binary] }
+    gates:
+      - { metric: recall, op: ">=", value: 0.5 }
+    objective:
+      metric: fp_rate
+      target: 0.05

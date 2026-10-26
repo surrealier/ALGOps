@@ -15,6 +15,26 @@ from algops.core import MasterSettings
 SCHEME = "algops://"
 
 
+class ArtifactKeyError(ValueError):
+    """A key/URI that would escape the store (``..``, absolute paths, other schemes)."""
+
+
+def clean_key(key_or_uri: str) -> str:
+    """``algops://a/b`` or ``a/b`` -> ``a/b``; rejects anything that could leave the store root."""
+    if not isinstance(key_or_uri, str):
+        raise ArtifactKeyError("artifact key must be a string")
+    key = key_or_uri
+    if key.startswith(SCHEME):
+        key = key[len(SCHEME):]
+    elif "://" in key:
+        raise ArtifactKeyError(f"not an ALGOps artifact uri: {key_or_uri!r}")
+    key = key.replace("\\", "/").lstrip("/")
+    parts = key.split("/")
+    if not key or any(p in ("", ".", "..") for p in parts) or "\x00" in key or ":" in parts[0]:
+        raise ArtifactKeyError(f"invalid artifact key: {key_or_uri!r}")
+    return key
+
+
 class ArtifactStore(ABC):
     @abstractmethod
     def put_bytes(self, key: str, data: bytes) -> str: ...
@@ -35,15 +55,20 @@ class LocalArtifactStore(ArtifactStore):
         os.makedirs(self.root, exist_ok=True)
 
     def _path(self, key: str) -> str:
-        key = key.removeprefix(SCHEME).lstrip("/")
-        return os.path.join(self.root, key.replace("/", os.sep))
+        key = clean_key(key)
+        path = os.path.join(self.root, key.replace("/", os.sep))
+        real_root = os.path.realpath(self.root)
+        real = os.path.realpath(path)
+        if real != real_root and not real.startswith(real_root + os.sep):
+            raise ArtifactKeyError(f"artifact key escapes the store: {key!r}")
+        return path
 
     def put_bytes(self, key: str, data: bytes) -> str:
         path = self._path(key)
         os.makedirs(os.path.dirname(path) or self.root, exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(data)
-        return SCHEME + key.removeprefix(SCHEME).lstrip("/")
+        return SCHEME + clean_key(key)
 
     def get_bytes(self, uri: str) -> bytes:
         with open(self._path(uri), "rb") as fh:
@@ -72,7 +97,7 @@ class S3ArtifactStore(ArtifactStore):  # pragma: no cover - requires MinIO/S3 + 
                 pass
 
     def _key(self, key: str) -> str:
-        return key.removeprefix(SCHEME).lstrip("/")
+        return clean_key(key)
 
     def put_bytes(self, key: str, data: bytes) -> str:
         k = self._key(key)

@@ -80,6 +80,7 @@ class QdrantNeo4jRagStore:  # pragma: no cover - requires live Qdrant + Neo4j
                         "run_id": report.run_id,
                         "experiment_id": report.experiment_id,
                         "project_id": report.project_id,
+                        "algorithm_id": report.algorithm_id,
                         "iteration_index": report.iteration_index,
                         "goal_tag": report.goal_tag,
                         "params_changed": report.params_changed,
@@ -149,6 +150,9 @@ class QdrantNeo4jRagStore:  # pragma: no cover - requires live Qdrant + Neo4j
             query_filter=models.Filter(
                 must=[models.FieldCondition(key="project_id",
                                             match=models.MatchValue(value=query.project_id))]
+                + ([models.FieldCondition(key="algorithm_id",
+                                          match=models.MatchValue(value=query.algorithm_id))]
+                   if query.algorithm_id else [])
             ),
             limit=max(query.top_k * 3, query.top_k),
             with_payload=True,

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 
-from algops.core import RunRequest, new_id
+from algops.core import RunRequest, new_id, normalize_metrics
 from algops.extraction import aggregate_multistage, load_manifest, resolve_sibling_uri
 from algops.toy_project import load_param_spec, run as toy_run
 
@@ -35,14 +34,14 @@ def test_param_spec_has_two_params():
 def test_monotonic_tradeoff(tmp_path):
     lo = _run(tmp_path, {PK: 0.05}).metrics
     hi = _run(tmp_path, {PK: 0.85}).metrics
-    assert lo.fp_rate > hi.fp_rate
-    assert lo.fn_rate < hi.fn_rate
+    assert lo["fp_rate"] > hi["fp_rate"]
+    assert lo["fn_rate"] < hi["fn_rate"]
 
 
 def test_determinism(tmp_path):
     a = _run(tmp_path, {PK: 0.5}).metrics
     b = _run(tmp_path, {PK: 0.5}).metrics
-    assert a.model_dump() == b.model_dump()
+    assert a == b
 
 
 def test_manifest_and_multistage_aggregation(tmp_path):
@@ -61,9 +60,9 @@ def test_manifest_and_multistage_aggregation(tmp_path):
     assert stage_texts["ai_inference"].splitlines()[0].startswith(
         "run_id,item_id,frame_index,entity_id,stage,ai_confidence"
     )
-    agg = aggregate_multistage(manifest, stage_texts)
+    agg = aggregate_multistage(manifest, stage_texts, reason_map=load_param_spec().reason_map())
     # Master-side recompute (joined on entity_id) must match the slave-reported metrics.
-    assert agg["metrics"].model_dump() == res.metrics.model_dump()
+    assert normalize_metrics(agg["metrics"]) == res.metrics
     assert agg["stage_counts"]["decision"] == 280
 
 
@@ -75,10 +74,11 @@ def test_roundness_param_attributed_in_sensitivity(tmp_path):
         s["stage"]: _read(resolve_sibling_uri(res.csv_manifest_uri, s["csv"]))
         for s in manifest["stages"]
     }
-    agg = aggregate_multistage(manifest, stage_texts)
+    reasons = load_param_spec().reason_map()  # declared drop_reasons, no hardcoded mapping
+    agg = aggregate_multistage(manifest, stage_texts, reason_map=reasons)
     assert agg["sensitivity"].get(RK, 0) > 0  # roundness filter is responsible for drops
     # With the default (0.0) the roundness filter drops nothing.
     res0 = _run(tmp_path, {PK: 0.05, RK: 0.0})
     m0 = load_manifest(_read(res0.csv_manifest_uri))
     st0 = {s["stage"]: _read(resolve_sibling_uri(res0.csv_manifest_uri, s["csv"])) for s in m0["stages"]}
-    assert aggregate_multistage(m0, st0)["sensitivity"].get(RK, 0) == 0
+    assert aggregate_multistage(m0, st0, reason_map=reasons)["sensitivity"].get(RK, 0) == 0

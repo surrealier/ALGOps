@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../params.schema.json
+# Externalized post-processing parameters of `{algo}` (schema: params.schema.json).
+# `key` is dotted, unique within the algorithm and IMMUTABLE (renaming breaks lineage + learned influence).
+meta:
+  algops_contract_version: "2.0"
+  param_spec_version: 1
+  modality: tabular
+  generated_by: algops-init
+params:
+  - key: {algo_key}.confidence_threshold
+    dtype: float
+    default: 0.5
+    range: [0.05, 0.95]
+    step: 0.05
+    stage: decision
+    influence: {{ fp: high, fn: high }}
+    drop_reasons: [below_threshold]
+    description: "Minimum score to keep a detection. Higher -> fewer FP, more FN."

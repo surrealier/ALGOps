@@ -93,7 +93,31 @@ class SlaveStatus(str, Enum):
 
 class CommandKind(str, Enum):
     run = "run"
+    sync = "sync"  # resolve ref -> sha + read the manifest at that commit
+    promote = "promote"  # write new param defaults on a branch (+ push / PR)
     noop = "noop"
+
+
+class Verdict(str, Enum):
+    """Benchmark cell verdict (absolute gates first, then baseline comparison)."""
+
+    pending = "pending"
+    passed = "passed"
+    improved = "improved"  # passed and better than baseline beyond tolerance
+    regressed = "regressed"  # gates pass but worse than baseline beyond tolerance
+    gate_failed = "gate_failed"
+    error = "error"
+
+
+FAILING_VERDICTS = frozenset({Verdict.regressed, Verdict.gate_failed, Verdict.error})
+
+
+class BenchmarkStatus(str, Enum):
+    created = "created"
+    running = "running"
+    passed = "passed"  # every cell passed/improved
+    failed = "failed"  # at least one failing verdict
+    error = "error"  # the benchmark itself could not run (no runner, sync failed, ...)
 
 
 class RunStatus(str, Enum):

@@ -17,6 +17,7 @@ params:
     influence: { fp: high, fn: high }
     unit: probability
     description: "Minimum detector score to KEEP a detection. Higher → fewer FP, more FN."
+    drop_reasons: [below_threshold]
   - key: postproc.roundness.min
     dtype: float
     default: 0.0
@@ -25,3 +26,4 @@ params:
     stage: postproc_shape
     influence: { fp: high, fn: medium }
     description: "Minimum shape roundness to KEEP. Default 0.0 disables the filter (no-op)."
+    drop_reasons: [low_roundness]

@@ -1,0 +1,74 @@
+# Example repository: two algorithms (a detector post-processor and a signal smoother),
+# each evaluated on two suites. Try:
+#   algops validate examples/py-multi-algo
+#   algops run      examples/py-multi-algo -a detector -s smoke --set detector.score_threshold=0.6
+#   algops test     examples/py-multi-algo
+algops: 2
+name: py-multi-algo
+
+env:
+  setup: []            # e.g. ["uv sync"] — this example only needs the stdlib
+
+suites:
+  - id: det-smoke
+    uri: data/detector/smoke
+    tags: [fast, detector]
+  - id: det-full
+    uri: data/detector/full
+    tags: [detector]
+  - id: sig-smoke
+    uri: data/smoother/smoke
+    tags: [fast, signal]
+  - id: sig-full
+    uri: data/smoother/full
+    tags: [signal]
+
+algorithms:
+  - id: detector
+    description: Score / area post-processing filters on detector candidates
+    params: algops/detector/params.yaml
+    entrypoint:
+      python: "algops/detector/run.py:run"
+    suites: [det-smoke, det-full]
+    metrics:
+      presets: [binary]
+      declare:
+        - { name: latency_us, direction: minimize, unit: us }
+    gates:
+      - { metric: recall, op: ">=", value: 0.6 }
+      - { metric: precision, op: ">=", value: 0.6 }
+    regression:
+      rel_tolerance: 0.03
+    objective:
+      metric: fp_rate
+      target: 0.08
+      constraints:
+        - { metric: recall, op: ">=", value: 0.7 }
+
+  - id: smoother
+    description: Median prefilter + exponential smoothing of a noisy signal
+    params:                                   # inline parameters (no separate params.yaml)
+      - key: smoother.alpha
+        dtype: float
+        default: 0.9
+        range: [0.05, 1.0]
+        step: 0.05
+        stage: smoothing
+        description: EMA weight of the newest sample (1.0 = no smoothing)
+      - key: smoother.window
+        dtype: int
+        default: 1
+        range: [1, 15]
+        step: 2
+        stage: prefilter
+        description: Moving-median window (odd; 1 = off) — removes impulsive outliers
+    entrypoint:
+      python: "algops/smoother/run.py:run"
+    suites: [sig-smoke, sig-full]
+    metrics:
+      presets: [regression]
+    gates:
+      - { metric: mae, op: "<=", value: 0.35 }
+    objective:
+      metric: mae
+      target: 0.08

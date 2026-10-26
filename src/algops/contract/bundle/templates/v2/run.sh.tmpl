@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+# ALGOps entrypoint for `{algo}` (contract v2, any language).
+# Inputs : $ALGOPS_PARAM_<KEY> (or $ALGOPS_PARAMS_FILE json), $ALGOPS_SUITE_PATH, $ALGOPS_OUTPUT_DIR
+# Output : write JSON to $ALGOPS_RESULT  ({{"status":"ok","metrics":{{...}},"counts":{{...}}}})
+set -eu
+THR="${{ALGOPS_PARAM_{algo_env}_CONFIDENCE_THRESHOLD}}"
+awk -F, -v thr="$THR" 'NR>1 {{ kept = ($2 >= thr); gt = $3 + 0;
+  if (kept && gt) tp++; else if (kept) fp++; else if (gt) fn++; else tn++ }}
+  END {{ printf "{{\"status\":\"ok\",\"metrics\":{{}},\"counts\":{{\"tp\":%d,\"fp\":%d,\"fn\":%d,\"tn\":%d}}}}\n", tp, fp, fn, tn }}' \
+  "$ALGOPS_SUITE_PATH/items.csv" > "$ALGOPS_RESULT"

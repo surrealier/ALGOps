@@ -1,14 +1,20 @@
-# ALGOps slave (per-project agent). Runs on each developer PC (B/C/D...). Outbound-only.
+# ALGOps runner ("slave"): executes algorithm runs for any number of repositories.
+# Outbound-only. Needs git (+ ssh for private repos) and whatever toolchains your repositories'
+# `env.setup` uses — extend this image (FROM algops/slave) for CUDA, JDK, MATLAB runtime, ...
 FROM python:3.12-slim
-
-RUN pip install --no-cache-dir uv
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client ca-certificates build-essential \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir uv
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-RUN uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
-ENV ALGOPS_SLAVE_HOST=0.0.0.0
-# Mount the target project at /workspace/project and set ALGOPS_SLAVE_PROJECT_PATH to it (M4).
-# With no project path, the bundled toy detector is used (M0).
-CMD ["uv", "run", "algops-slave"]
+ENV ALGOPS_SLAVE_HOST=0.0.0.0 \
+    ALGOPS_SLAVE_WORK_DIR=/work
+VOLUME ["/work"]
+# Git projects: registered on the master (URL), cloned here per commit.
+# Local projects: mount them and set ALGOPS_SLAVE_LOCAL_PROJECTS="name=/workspace/project".
+CMD ["uv", "run", "algops", "slave"]

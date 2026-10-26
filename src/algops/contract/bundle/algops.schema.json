@@ -1,0 +1,644 @@
+{
+  "$defs": {
+    "AlgorithmSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "modality": {
+          "default": "tabular",
+          "title": "Modality",
+          "type": "string"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ParamDef"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Params"
+        },
+        "entrypoint": {
+          "$ref": "#/$defs/EntrypointSpec"
+        },
+        "metrics": {
+          "$ref": "#/$defs/MetricsDecl"
+        },
+        "gates": {
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          },
+          "title": "Gates",
+          "type": "array"
+        },
+        "regression": {
+          "$ref": "#/$defs/RegressionPolicy"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectiveDecl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "suites": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suites"
+        },
+        "runs_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Runs On",
+          "type": "array"
+        },
+        "timeout_s": {
+          "default": 900.0,
+          "title": "Timeout S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "entrypoint"
+      ],
+      "title": "AlgorithmSpec",
+      "type": "object"
+    },
+    "Constraint": {
+      "additionalProperties": false,
+      "description": "``metric op value`` — e.g. ``recall >= 0.9``. Also used for absolute benchmark gates.",
+      "properties": {
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "op": {
+          "default": ">=",
+          "enum": [
+            ">=",
+            "<=",
+            ">",
+            "<",
+            "=="
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "metric",
+        "value"
+      ],
+      "title": "Constraint",
+      "type": "object"
+    },
+    "Dtype": {
+      "enum": [
+        "float",
+        "int",
+        "bool",
+        "enum"
+      ],
+      "title": "Dtype",
+      "type": "string"
+    },
+    "EntrypointSpec": {
+      "additionalProperties": false,
+      "description": "Exactly one of ``command`` (any language) or ``python`` (SDK shim) must be given.\n\n``command`` may be an argv list or a shell string; both support placeholders:\n``{request} {result} {output_dir} {params} {suite_path} {suite_uri} {run_id} {repo_root}``\nand ``{param:<key>}``.",
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "cwd": {
+          "default": ".",
+          "title": "Cwd",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        }
+      },
+      "title": "EntrypointSpec",
+      "type": "object"
+    },
+    "EnvSpec": {
+      "additionalProperties": false,
+      "description": "How the runner prepares a checkout before its first run (cached per commit+setup).",
+      "properties": {
+        "setup": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Setup",
+          "type": "array"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "setup_timeout_s": {
+          "default": 1800.0,
+          "title": "Setup Timeout S",
+          "type": "number"
+        }
+      },
+      "title": "EnvSpec",
+      "type": "object"
+    },
+    "GoalDirection": {
+      "enum": [
+        "minimize",
+        "maximize"
+      ],
+      "title": "GoalDirection",
+      "type": "string"
+    },
+    "Influence": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "none",
+        "unknown"
+      ],
+      "title": "Influence",
+      "type": "string"
+    },
+    "InfluenceTags": {
+      "additionalProperties": false,
+      "description": "A-priori belief about how a parameter moves false-positive / false-negative rates.",
+      "properties": {
+        "fp": {
+          "$ref": "#/$defs/Influence",
+          "default": "unknown"
+        },
+        "fn": {
+          "$ref": "#/$defs/Influence",
+          "default": "unknown"
+        }
+      },
+      "title": "InfluenceTags",
+      "type": "object"
+    },
+    "MetricSpec": {
+      "additionalProperties": false,
+      "description": "A metric an algorithm declares: its name, which way is better, and presentation hints.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/GoalDirection"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "name",
+        "direction"
+      ],
+      "title": "MetricSpec",
+      "type": "object"
+    },
+    "MetricsDecl": {
+      "additionalProperties": false,
+      "properties": {
+        "presets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Presets",
+          "type": "array"
+        },
+        "declare": {
+          "items": {
+            "$ref": "#/$defs/MetricSpec"
+          },
+          "title": "Declare",
+          "type": "array"
+        }
+      },
+      "title": "MetricsDecl",
+      "type": "object"
+    },
+    "ObjectiveDecl": {
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "constraints": {
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          },
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "metric"
+      ],
+      "title": "ObjectiveDecl",
+      "type": "object"
+    },
+    "ParamDef": {
+      "additionalProperties": false,
+      "description": "One row of ``params.yaml`` — the externalized definition of a single knob.",
+      "properties": {
+        "key": {
+          "description": "dotted, unique within an algorithm, immutable",
+          "title": "Key",
+          "type": "string"
+        },
+        "dtype": {
+          "$ref": "#/$defs/Dtype"
+        },
+        "default": {
+          "title": "Default"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step"
+        },
+        "enum": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enum"
+        },
+        "stage": {
+          "default": "decision",
+          "title": "Stage",
+          "type": "string"
+        },
+        "influence": {
+          "$ref": "#/$defs/InfluenceTags"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "drop_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Drop Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "dtype",
+        "default"
+      ],
+      "title": "ParamDef",
+      "type": "object"
+    },
+    "ParamSpec": {
+      "description": "The full set of externalized parameters for a project (one ``params.yaml``).",
+      "properties": {
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "modality": {
+          "default": "tabular",
+          "title": "Modality",
+          "type": "string"
+        },
+        "params": {
+          "items": {
+            "$ref": "#/$defs/ParamDef"
+          },
+          "title": "Params",
+          "type": "array"
+        }
+      },
+      "title": "ParamSpec",
+      "type": "object"
+    },
+    "RegressionPolicy": {
+      "additionalProperties": false,
+      "description": "How a benchmark cell is compared against its baseline.\n\nA metric regresses when it moves in the *worse* direction by more than\n``max(abs_tolerance[metric], rel_tolerance * |baseline|)``. By default the objective metric\nand the gate metrics are tracked; objective *constraints* are thresholds (like gates), so a\nconstrained metric drifting while still satisfying its constraint is not a regression.",
+      "properties": {
+        "metrics": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metrics"
+        },
+        "rel_tolerance": {
+          "default": 0.02,
+          "title": "Rel Tolerance",
+          "type": "number"
+        },
+        "abs_tolerance": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Abs Tolerance",
+          "type": "object"
+        }
+      },
+      "title": "RegressionPolicy",
+      "type": "object"
+    },
+    "SuiteSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "uri": {
+          "default": "",
+          "title": "Uri",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "SuiteSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "algops": {
+      "default": 2,
+      "title": "Algops",
+      "type": "integer"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Name"
+    },
+    "env": {
+      "$ref": "#/$defs/EnvSpec"
+    },
+    "suites": {
+      "items": {
+        "$ref": "#/$defs/SuiteSpec"
+      },
+      "title": "Suites",
+      "type": "array"
+    },
+    "algorithms": {
+      "items": {
+        "$ref": "#/$defs/AlgorithmSpec"
+      },
+      "title": "Algorithms",
+      "type": "array"
+    }
+  },
+  "required": [
+    "algorithms"
+  ],
+  "title": "ALGOps algops.yaml (contract v2)",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

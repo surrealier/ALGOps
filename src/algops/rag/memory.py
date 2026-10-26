@@ -65,7 +65,8 @@ class InMemoryRagStore:
         return [h for h in ranked if h.helped or h.hurt][:5]
 
     def retrieve(self, query: RagQuery) -> RagContext:
-        pool = [r for r in self._reports if r.project_id == query.project_id]
+        pool = [r for r in self._reports if r.project_id == query.project_id
+                and (query.algorithm_id is None or r.algorithm_id == query.algorithm_id)]
         if not pool:
             return RagContext()
         qvec = self.embedder.embed(f"{query.goal_text} {query.target_metric}")

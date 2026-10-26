@@ -1,0 +1,44 @@
+# Example: an algorithm written in C. The runner compiles it once per commit (env.setup),
+# then passes parameters as environment variables and reads result.json — no SDK, no Python.
+algops: 2
+name: c-threshold
+env:
+  setup:
+    - mkdir -p build && cc -O2 -o build/eval src/eval.c
+suites:
+  - id: smoke
+    uri: data/smoke
+    tags: [fast]
+  - id: full
+    uri: data/full
+algorithms:
+  - id: filter
+    description: Debounced score threshold over a frame sequence
+    params:
+      - key: filter.threshold
+        dtype: float
+        default: 0.5
+        range: [0.1, 0.9]
+        step: 0.05
+        stage: decision
+        influence: { fp: high, fn: high }
+      - key: filter.min_streak
+        dtype: int
+        default: 1
+        range: [1, 6]
+        step: 1
+        stage: decision
+        influence: { fp: high, fn: medium }
+        description: Consecutive frames above threshold before a detection fires
+    entrypoint:
+      command: ["./build/eval"]
+    metrics:
+      presets: [binary]
+      declare:
+        - { name: latency_us, direction: minimize, unit: us }
+    gates:
+      - { metric: recall, op: ">=", value: 0.5 }
+    objective:
+      metric: f1
+      direction: maximize
+      target: 0.9

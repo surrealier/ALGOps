@@ -1,11 +1,12 @@
-# ALGOps FULL production stack (M5) for server A — Postgres + Redis + MinIO + Qdrant + Neo4j +
-# a Celery worker + Traefik (TLS/auth). The experiment loop runs in the WORKER (dev_mode=false)
-# and talks to the API process over the Redis-backed command bus + progress channel.
+# ALGOps FULL production stack for server A — Postgres + Redis + MinIO + Qdrant + Neo4j +
+# a Celery worker + Traefik (TLS/auth). Campaigns and benchmarks run in the WORKER
+# (dev_mode=false) and talk to the API process over the Redis-backed command bus + progress
+# channel. The scheduler (cron / git-watch) runs in the single API process.
 #
 #   docker compose -f deploy/docker-compose.full.yml up -d --build
 #   # UI behind Traefik:  https://<A_IP>/      (self-signed by default; see deploy/traefik/)
 #
-# Slaves on PCs B/C/D connect to https://<A_IP> (or http://<A_IP>:8000 if not using Traefik).
+# Runners (deploy/docker-compose.slave.yml) connect to https://<A_IP> (or http://<A_IP>:8000).
 
 x-master-env: &master-env
   ALGOPS_MASTER_DEV_MODE: "false"
@@ -24,7 +25,14 @@ x-master-env: &master-env
   ALGOPS_MASTER_NEO4J_URI: "bolt://neo4j:7687"
   ALGOPS_MASTER_NEO4J_USER: "neo4j"
   ALGOPS_MASTER_NEO4J_PASSWORD: "algops-neo4j"
-  ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-change-me}"
+  ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:?set ALGOPS_ENROLL_TOKEN}"
+  # Mutating API calls (UI actions, `algops ci`) need this bearer token.
+  ALGOPS_MASTER_API_TOKEN: "${ALGOPS_API_TOKEN:?set ALGOPS_API_TOKEN}"
+  # Promotion: push proposal branches from the runners and open PRs/MRs from the master.
+  ALGOPS_MASTER_PROMOTE_PUSH: "${ALGOPS_PROMOTE_PUSH:-false}"
+  ALGOPS_MASTER_GIT_PROVIDER: "${ALGOPS_GIT_PROVIDER:-}"          # github | gitlab
+  ALGOPS_MASTER_GIT_PROVIDER_TOKEN: "${ALGOPS_GIT_PROVIDER_TOKEN:-}"
+  ALGOPS_MASTER_GIT_PROVIDER_API_URL: "${ALGOPS_GIT_PROVIDER_API_URL:-}"
   # LLM endpoint (M1) — point at vLLM/Ollama, or bring up deploy/docker-compose.llm.yml:
   ALGOPS_MASTER_LLM__MODE: "${ALGOPS_LLM_MODE:-none}"
   ALGOPS_MASTER_LLM__BASE_URL: "${ALGOPS_LLM_BASE_URL:-}"
@@ -48,7 +56,7 @@ services:
 
   master-api:
     build: { context: .., dockerfile: deploy/Dockerfile.master }
-    image: algops/master:0.0.0
+    image: algops/master:0.2.0
     environment: *master-env
     depends_on: [postgres, redis, minio, qdrant, neo4j]
     labels:
@@ -61,9 +69,11 @@ services:
     restart: unless-stopped
 
   master-worker:
-    image: algops/master:0.0.0
+    image: algops/master:0.2.0
     command: ["uv", "run", "celery", "-A", "algops.master.celery_app:celery", "worker", "--loglevel=info"]
-    environment: *master-env
+    environment:
+      <<: *master-env
+      ALGOPS_MASTER_SCHEDULER_ENABLED: "false"
     depends_on: [master-api, postgres, redis]
     restart: unless-stopped
 

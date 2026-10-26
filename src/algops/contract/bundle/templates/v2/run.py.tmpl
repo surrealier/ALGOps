@@ -1,0 +1,36 @@
+"""ALGOps entrypoint for `{algo}` (contract v2, Python SDK).
+
+`algops_sdk` is injected by the runner — your environment does not need ALGOps installed.
+Replace the toy loop with your model + post-processing over `ctx.suite_path`.
+"""
+
+import csv
+import os
+import time
+
+import algops_sdk as sdk
+
+
+def run(ctx: sdk.Context):
+    thr = float(ctx.params["{algo_key}.confidence_threshold"])
+    decisions = ctx.stage("decision", ["ai_confidence", "dec_kept", "dec_reason", "gt_match"])
+    tp = fp = fn = tn = 0
+    started = time.perf_counter()
+    path = os.path.join(ctx.suite_path or ".", "items.csv")
+    with open(path, newline="", encoding="utf-8") as fh:
+        for i, row in enumerate(csv.DictReader(fh)):
+            score, gt = float(row["score"]), int(row["label"])
+            kept = score >= thr
+            decisions.row(row.get("item_id", i), 0, f"e{{i}}", ai_confidence=score, dec_kept=kept,
+                          dec_reason="kept" if kept else "below_threshold", gt_match=gt)
+            if kept and gt:
+                tp += 1
+            elif kept:
+                fp += 1
+            elif gt:
+                fn += 1
+            else:
+                tn += 1
+    n = tp + fp + fn + tn
+    latency_ms = (time.perf_counter() - started) * 1000.0 / max(n, 1)
+    return sdk.counts(tp=tp, fp=fp, fn=fn, tn=tn, latency_ms=latency_ms)

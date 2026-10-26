@@ -51,7 +51,7 @@ class _RagHooks(NullHooks):
     def index_run_report(self, **fields):
         self.store.index_run(RunReport(**fields))
 
-    def retrieve_rag(self, *, project_id, goal_text, target_metric, top_k):
+    def retrieve_rag(self, *, project_id, goal_text, target_metric, top_k, algorithm_id=None):
         ctx = self.store.retrieve(
             RagQuery(project_id=project_id, goal_text=goal_text, target_metric=target_metric, top_k=top_k)
         )

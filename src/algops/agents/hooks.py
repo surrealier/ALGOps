@@ -1,14 +1,12 @@
 """Side-effect hooks the loop calls (persistence, artifacts, progress, notification).
 
-Keeping these behind a protocol lets the loop stay pure: the smoke harness uses ``NullHooks``
-(or a printing subclass) while the master wires a DB/artifact/WS/notify implementation.
+Keeping these behind a protocol lets the loop stay pure: tests and the smoke harness use
+``NullHooks`` (or a subclass) while the master wires a DB/artifact/WS/notify implementation.
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol
-
-from algops.core import Metrics
 
 
 class LoopHooks(Protocol):
@@ -16,7 +14,8 @@ class LoopHooks(Protocol):
         """Push a progress event (WS to the browser / log)."""
 
     def on_run_created(
-        self, *, run_id: str, iteration: int, params: dict, derived_from: str | None
+        self, *, run_id: str, iteration: int, params: dict, derived_from: str | None,
+        kind: str = "search", suite_id: str | None = None,
     ) -> None: ...
 
     def on_run_result(
@@ -24,17 +23,18 @@ class LoopHooks(Protocol):
         *,
         run_id: str,
         status: str,
-        metrics: Metrics | None,
+        metrics: dict[str, float] | None,
         score: float | None,
         n_items: int | None,
         csv_manifest_uri: str | None,
+        result: Any = None,
     ) -> None: ...
 
     def put_summary(self, run_id: str, md: str) -> str | None:
         """Persist a run summary artifact, returning its uri (or None)."""
 
     def fetch_text(self, uri: str | None) -> str | None:
-        """Read back an artifact (e.g. the slave-produced CSV) as text."""
+        """Read back an artifact (e.g. the runner-produced CSV) as text."""
 
     def on_iteration(
         self,
@@ -52,17 +52,20 @@ class LoopHooks(Protocol):
         *,
         winning_run_id: str | None,
         params: dict,
-        metrics: Metrics | None,
+        metrics: dict[str, float] | None,
         stop_reason: str | None,
         report_md: str,
+        validation: dict | None = None,
+        changed_params: dict | None = None,
     ) -> dict[str, Any]:
-        """Persist final result, set experiment status, fire notification. Returns refs."""
+        """Persist final result, fire notification. Returns notification refs."""
 
     def index_run_report(self, **fields: Any) -> None:
         """Index a run's report into the RAG stores (Qdrant doc + Neo4j graph)."""
 
     def retrieve_rag(
-        self, *, project_id: str, goal_text: str, target_metric: str, top_k: int
+        self, *, project_id: str, goal_text: str, target_metric: str, top_k: int,
+        algorithm_id: str | None = None,
     ) -> dict[str, Any]:
         """Retrieve prior-experiment context. Returns {'text': str, 'anchor_ids': list}."""
 
@@ -83,6 +86,12 @@ class NullHooks:
         return None
 
     def fetch_text(self, uri: str | None) -> str | None:
+        if uri and "://" not in uri:
+            try:
+                with open(uri, encoding="utf-8") as fh:
+                    return fh.read()
+            except OSError:
+                return None
         return None
 
     def on_iteration(self, **_: Any) -> None:

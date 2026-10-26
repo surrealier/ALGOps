@@ -5,6 +5,7 @@ from __future__ import annotations
 from .csv import aggregate_multistage, load_manifest, resolve_sibling_uri
 from .scoring import is_better, objective_value, target_reached
 from .summarize import aggregate_decision_csv, summarize_markdown
+from .verdict import compare_to_baseline, decide, evaluate_gates, judge
 
 __all__ = [
     "is_better",
@@ -15,4 +16,8 @@ __all__ = [
     "aggregate_multistage",
     "load_manifest",
     "resolve_sibling_uri",
+    "compare_to_baseline",
+    "decide",
+    "evaluate_gates",
+    "judge",
 ]
