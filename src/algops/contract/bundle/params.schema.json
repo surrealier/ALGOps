@@ -1,61 +1,153 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ALGOps params.yaml",
+  "title": "ALGOps params.yaml (contract v2)",
   "type": "object",
-  "required": ["meta", "params"],
+  "required": [
+    "meta",
+    "params"
+  ],
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["algops_contract_version", "modality"],
+      "required": [
+        "algops_contract_version",
+        "modality"
+      ],
       "properties": {
-        "algops_contract_version": { "type": "string" },
-        "project_id": { "type": "string" },
-        "param_spec_version": { "type": "integer", "minimum": 1 },
-        "modality": { "enum": ["video", "image", "audio", "tabular"] },
-        "generated_by": { "type": "string" }
+        "algops_contract_version": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "param_spec_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "modality": {
+          "type": "string",
+          "description": "free-form, e.g. image | video | audio | tabular | signal"
+        },
+        "generated_by": {
+          "type": "string"
+        }
       }
     },
     "params": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "dtype", "default", "stage"],
+        "required": [
+          "key",
+          "dtype",
+          "default",
+          "stage"
+        ],
         "properties": {
           "key": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
             "description": "dotted, globally unique, IMMUTABLE"
           },
-          "dtype": { "enum": ["float", "int", "bool", "enum"] },
+          "dtype": {
+            "enum": [
+              "float",
+              "int",
+              "bool",
+              "enum"
+            ]
+          },
           "default": {},
           "range": {
             "type": "array",
-            "items": { "type": "number" },
+            "items": {
+              "type": "number"
+            },
             "minItems": 2,
             "maxItems": 2,
             "description": "required for float/int"
           },
-          "step": { "type": "number", "description": "search granularity; required for float/int" },
-          "enum": { "type": "array", "description": "required for dtype=enum" },
-          "stage": { "type": "string", "description": "must match a CSV stage id" },
+          "step": {
+            "type": "number",
+            "description": "search granularity; required for float/int"
+          },
+          "enum": {
+            "type": "array",
+            "description": "required for dtype=enum"
+          },
+          "stage": {
+            "type": "string",
+            "description": "must match a CSV stage id"
+          },
           "influence": {
             "type": "object",
             "properties": {
-              "fp": { "enum": ["high", "medium", "low", "none", "unknown"] },
-              "fn": { "enum": ["high", "medium", "low", "none", "unknown"] }
+              "fp": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low",
+                  "none",
+                  "unknown"
+                ]
+              },
+              "fn": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low",
+                  "none",
+                  "unknown"
+                ]
+              }
             }
           },
-          "unit": { "type": "string" },
-          "description": { "type": "string" }
+          "unit": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "drop_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "dec_reason values (telemetry) caused by this parameter's filter"
+          }
         },
         "allOf": [
           {
-            "if": { "properties": { "dtype": { "enum": ["float", "int"] } } },
-            "then": { "required": ["range", "step"] }
+            "if": {
+              "properties": {
+                "dtype": {
+                  "enum": [
+                    "float",
+                    "int"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "range",
+                "step"
+              ]
+            }
           },
           {
-            "if": { "properties": { "dtype": { "const": "enum" } } },
-            "then": { "required": ["enum"] }
+            "if": {
+              "properties": {
+                "dtype": {
+                  "const": "enum"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "enum"
+              ]
+            }
           }
         ]
       }

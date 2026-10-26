@@ -58,8 +58,8 @@ def init_repo(root: str, *, algorithm: str = "main", lang: str = "python", name:
             os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     _write(os.path.join(root, "data", "smoke", "items.csv"), _tmpl("items.csv.tmpl"), force, written, skipped)
     if with_docs:
-        for doc in ("AGENTS.md", "CLAUDE.md", "params.schema.json"):
-            dst = os.path.join(root, doc) if doc != "params.schema.json" else os.path.join(root, "algops", doc)
+        for doc in ("AGENTS.md", "CLAUDE.md", "params.schema.json", "algops.schema.json"):
+            dst = os.path.join(root, doc) if doc.endswith(".md") else os.path.join(root, "algops", doc)
             if os.path.exists(dst) and not force:
                 skipped.append(dst)
                 continue

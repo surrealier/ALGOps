@@ -126,3 +126,10 @@ def test_verdicts_gate_then_baseline():
     assert v is Verdict.improved
     v, _, _ = judge(det, False, None, good)
     assert v is Verdict.error
+
+
+def test_shipped_manifest_schema_is_current():
+    from algops.contract.schema import BUNDLE, render
+
+    with open(os.path.join(BUNDLE, "algops.schema.json"), encoding="utf-8") as fh:
+        assert fh.read() == render(), "run: python -m algops.contract.schema"
