@@ -30,6 +30,7 @@ class CommandBus:
         self._events: dict[str, asyncio.Event] = {}
         self._results: dict[str, asyncio.Future] = {}
         self._owner: dict[str, str] = {}  # command_id -> slave_id (in flight)
+        self._picked: set[str] = set()  # commands a runner has taken off its queue
 
     def _event(self, slave_id: str) -> asyncio.Event:
         return self._events.setdefault(slave_id, asyncio.Event())
@@ -51,18 +52,31 @@ class CommandBus:
         return cmd.command_id
 
     async def wait(self, command_id: str, timeout: float) -> CommandResultUpload | None:
-        fut = self._future(command_id)
+        fut = self._results.get(command_id)
+        if fut is None:  # unknown or already forgotten — never resurrect it
+            return None
         try:
             return await asyncio.wait_for(asyncio.shield(fut), timeout)
         except asyncio.TimeoutError:
             return None
 
+    async def picked(self, command_id: str) -> bool:
+        """Has a runner taken this command off its queue (i.e. started executing it)?"""
+        return command_id in self._picked
+
     async def forget(self, command_id: str) -> None:
         """Drop a command (queued or in flight) — its late result, if any, is ignored."""
         slave_id = self._owner.pop(command_id, None)
+        self._picked.discard(command_id)
         if slave_id is not None:
-            queue = self._pending.get(slave_id, [])
-            self._pending[slave_id] = [c for c in queue if c.command_id != command_id]
+            queue = [c for c in self._pending.get(slave_id, []) if c.command_id != command_id]
+            if queue:
+                self._pending[slave_id] = queue
+            else:
+                self._pending.pop(slave_id, None)
+                ev = self._events.get(slave_id)
+                if ev is not None:
+                    ev.clear()
         fut = self._results.pop(command_id, None)
         if fut is not None and not fut.done():
             fut.cancel()
@@ -78,11 +92,13 @@ class CommandBus:
                 await asyncio.wait_for(event.wait(), timeout)
             except asyncio.TimeoutError:
                 return NextCommandResponse(kind=CommandKind.noop)
-        pending = self._pending.setdefault(slave_id, [])
+        pending = self._pending.get(slave_id, [])
         if pending:
             cmd = pending.pop(0)
             if not pending:
                 event.clear()
+            if cmd.command_id:
+                self._picked.add(cmd.command_id)
             return cmd
         event.clear()
         return NextCommandResponse(kind=CommandKind.noop)
@@ -90,6 +106,7 @@ class CommandBus:
     async def deliver(self, upload: CommandResultUpload) -> bool:
         fut = self._results.get(upload.command_id)
         self._owner.pop(upload.command_id, None)
+        self._picked.discard(upload.command_id)
         if fut is not None and not fut.done():
             fut.set_result(upload)
             return True
@@ -136,8 +153,12 @@ class RedisCommandBus:  # pragma: no cover - requires a running Redis (prod cros
         self._local_owner.pop(command_id, None)
         return CommandResultUpload.model_validate_json(popped[1])
 
+    async def picked(self, command_id: str) -> bool:
+        return bool(await self._r.exists(f"algops:picked:{command_id}"))
+
     async def forget(self, command_id: str) -> None:
         slave_id = self._local_owner.pop(command_id, None)
+        await self._r.delete(f"algops:picked:{command_id}")
         if slave_id is None:
             return
         key = f"algops:cmds:{slave_id}"
@@ -156,7 +177,10 @@ class RedisCommandBus:  # pragma: no cover - requires a running Redis (prod cros
         popped = await self._r.blpop(f"algops:cmds:{slave_id}", timeout=max(1, int(timeout)))
         if popped is None:
             return NextCommandResponse(kind=CommandKind.noop)
-        return NextCommandResponse.model_validate_json(popped[1])
+        cmd = NextCommandResponse.model_validate_json(popped[1])
+        if cmd.command_id:
+            await self._r.set(f"algops:picked:{cmd.command_id}", "1", ex=7 * 86400)
+        return cmd
 
     async def deliver(self, upload: CommandResultUpload) -> bool:
         key = f"algops:res:{upload.command_id}"

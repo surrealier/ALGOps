@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 
 from algops.core import RunRequest, new_id, normalize_metrics

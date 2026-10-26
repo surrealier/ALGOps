@@ -1,10 +1,12 @@
 """Runner ("slave") lifecycle: register, heartbeat, long-poll for commands, post results, upload.
 
-All endpoints except ``register`` (enroll token) and the listing require the runner bearer
-token. Runners only ever make outbound calls — there is no inbound endpoint on a runner.
+All endpoints except ``register`` (enroll token) require the runner bearer token; the UI
+listing (``ui_router``) is guarded by the API token like the rest of the API. Runners only ever make outbound calls — there is no inbound endpoint on a runner.
 """
 
 from __future__ import annotations
+
+import hmac
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
@@ -24,7 +26,8 @@ from algops.tracking import get_session, repo
 from ..services.projects import record_revision
 from .deps import LONG_POLL_S, require_slave
 
-router = APIRouter(prefix="/api/v1/slaves", tags=["slaves"])
+router = APIRouter(prefix="/api/v1/slaves", tags=["slaves"])  # runner protocol (runner tokens)
+ui_router = APIRouter(prefix="/api/v1/slaves", tags=["slaves"])  # UI reads (API token)
 
 
 def _legacy_manifest(param_spec: dict | None, modality: str) -> dict:
@@ -45,7 +48,7 @@ def _legacy_manifest(param_spec: dict | None, modality: str) -> dict:
 @router.post("/register", response_model=SlaveRegisterResponse)
 def register(body: SlaveRegisterRequest, request: Request) -> SlaveRegisterResponse:
     settings = request.app.state.settings
-    if body.enroll_token != settings.enroll_token:
+    if not hmac.compare_digest(body.enroll_token.encode(), settings.enroll_token.encode()):
         raise HTTPException(401, "invalid enroll token")
     decls = list(body.local_projects)
     v1 = False
@@ -89,7 +92,7 @@ def register(body: SlaveRegisterRequest, request: Request) -> SlaveRegisterRespo
                                  project_ids=project_ids)
 
 
-@router.get("", response_model=list[SlaveOut])
+@ui_router.get("", response_model=list[SlaveOut])
 def list_slaves() -> list[SlaveOut]:
     with get_session() as s:
         return [

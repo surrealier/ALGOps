@@ -22,7 +22,7 @@ from algops.core import (
     new_token,
     normalize_metrics,
 )
-from algops.core.enums import ExperimentStatus, SlaveStatus
+from algops.core.enums import BenchmarkStatus, ExperimentStatus, SlaveStatus
 
 from .models import (
     Benchmark,
@@ -441,12 +441,14 @@ def upsert_final_result(
     attempt: int = 0,
     validation: dict | None = None,
     changed_params: dict | None = None,
+    commit_sha: str | None = None,
 ) -> FinalResult:
     fr = s.get(FinalResult, experiment_id)
     if fr is None:
         fr = FinalResult(experiment_id=experiment_id)
         s.add(fr)
     fr.attempt = attempt
+    fr.commit_sha = commit_sha
     fr.winning_run_id = winning_run_id
     fr.optimal_params = optimal_params
     values = normalize_metrics(metrics)
@@ -537,8 +539,9 @@ def baseline_cell(s: Session, *, project_id: str, algorithm_id: str, suite_id: s
         BenchmarkCell.benchmark_id != exclude_benchmark_id,
         BenchmarkCell.metrics.is_not(None),
     ))
-    if baseline != "previous":
-        stmt = stmt.where(BenchmarkCell.benchmark_id == baseline)
+    if baseline != "previous":  # an explicit benchmark: its evaluated cells, whatever the verdict
+        stmt = stmt.where(BenchmarkCell.benchmark_id == baseline,
+                          BenchmarkCell.verdict != Verdict.error.value)
     else:
         stmt = stmt.where(or_(BenchmarkCell.verdict.in_(_BASELINE_VERDICTS), BenchmarkCell.accepted.is_(True)))
     return s.scalars(stmt.order_by(BenchmarkCell.created_at.desc())).first()
@@ -568,3 +571,33 @@ def delete_schedule(s: Session, schedule_id: str) -> bool:
         return False
     s.delete(sch)
     return True
+
+
+# --------------------------------------------------------------------------- startup reconcile
+
+
+def reconcile_orphans(s: Session, reason: str = "the master restarted while this was running") -> dict[str, int]:
+    """Single-process (dev_mode) startup: workflows ran in the previous process and died with it.
+
+    Running campaigns -> failed (re-run starts a clean attempt; paused ones resume from their
+    checkpoint and are left alone); running/created benchmarks -> error, pending cells -> error.
+    """
+    now = utcnow()
+    exps = list(s.scalars(select(Experiment).where(Experiment.status == ExperimentStatus.running.value)))
+    for e in exps:
+        e.status = ExperimentStatus.failed.value
+        e.error = reason
+    benches = list(s.scalars(select(Benchmark).where(
+        Benchmark.status.in_((BenchmarkStatus.created.value, BenchmarkStatus.running.value)))))
+    cells = 0
+    for b in benches:
+        b.status = BenchmarkStatus.error.value
+        b.error = reason
+        b.finished_at = b.finished_at or now
+        for c in s.scalars(select(BenchmarkCell).where(and_(
+                BenchmarkCell.benchmark_id == b.benchmark_id,
+                BenchmarkCell.verdict == Verdict.pending.value))):
+            c.verdict = Verdict.error.value
+            c.error = reason
+            cells += 1
+    return {"experiments": len(exps), "benchmarks": len(benches), "cells": cells}

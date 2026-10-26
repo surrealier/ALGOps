@@ -107,6 +107,8 @@ class ParamDef(BaseModel):
             step = (hi - lo) / (max_points - 1)
             n = max_points
         pts = [self.coerce(lo + i * step) for i in range(n)]
+        if pts and float(pts[-1]) < hi - 1e-9 * max(1.0, abs(hi)):
+            pts.append(self.coerce(hi))  # range not a multiple of step: still explore the bound
         out: list[Any] = []
         for p in pts:
             if p not in out:

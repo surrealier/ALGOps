@@ -37,7 +37,7 @@ from algops.core import (
 )
 from algops.sdk import PROTOCOL_REQUEST, RESULT_MARKER, SDK_FILE
 
-from .process import run_process
+from .process import EnvPolicy, run_process
 
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 _BINARY_COUNTS = ("tp", "fp", "fn", "tn")
@@ -217,6 +217,7 @@ async def execute_run(
     default_python: str | None = None,
     extra_env: dict[str, str] | None = None,
     keep_run_dir: bool = True,
+    env_policy: EnvPolicy | None = None,
 ) -> RunOutcome:
     """Evaluate ``req`` against the checkout at ``repo_root`` and return the outcome.
 
@@ -250,7 +251,8 @@ async def execute_run(
     os.makedirs(sdk_dir, exist_ok=True)
     shutil.copyfile(SDK_FILE, os.path.join(sdk_dir, "algops_sdk.py"))
 
-    expand_env = dict(os.environ)
+    base_env = (env_policy or EnvPolicy()).environ()
+    expand_env = dict(base_env)
     expand_env.update(manifest.env.vars)
     try:
         suite_path = resolve_suite_path(suite, repo_root, expand_env)
@@ -278,7 +280,7 @@ async def execute_run(
     with open(params_path, "w", encoding="utf-8") as fh:
         json.dump(params, fh, ensure_ascii=False, indent=2)
 
-    env = dict(os.environ)
+    env = dict(base_env)
     env.update(manifest.env.vars)
     env.update(algo.entrypoint.env)
     env.update(extra_env or {})

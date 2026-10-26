@@ -20,10 +20,10 @@ function TokenDialog({ onClose }: { onClose: () => void }) {
   const [v, setV] = useState(token.get());
   return (
     <Modal title="API 토큰" onClose={onClose}>
-      <p className="muted sm">이 마스터는 변경 작업에 토큰을 요구합니다 (<code>ALGOPS_MASTER_API_TOKEN</code>). 이 브라우저에만 저장됩니다.</p>
+      <p className="muted sm">이 마스터는 API 토큰을 요구합니다 (<code>ALGOPS_MASTER_API_TOKEN</code>). 이 브라우저에만 저장됩니다.</p>
       <input type="password" value={v} autoFocus onChange={(e) => setV(e.target.value)} placeholder="토큰" />
       <div className="row gap" style={{ marginTop: 10 }}>
-        <button onClick={() => { token.set(v.trim()); notify("ok", "토큰을 저장했습니다"); onClose(); }}>저장</button>
+        <button onClick={() => { token.set(v.trim()); notify("ok", "토큰을 저장했습니다"); onClose(); window.location.reload(); }}>저장</button>
         <button className="ghost" onClick={() => { token.set(""); setV(""); }}>지우기</button>
       </div>
     </Modal>

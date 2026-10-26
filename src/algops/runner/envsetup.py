@@ -1,8 +1,10 @@
 """Per-checkout environment setup (``env.setup`` in algops.yaml), executed at most once.
 
-A marker keyed by (checkout path, commit sha, setup commands) is written under the runner's
-work dir — never inside the user's repository — so a git worktree is set up once per commit and
-a local project is re-set-up whenever its HEAD or its setup commands change.
+A marker keyed by (checkout path + identity, commit sha, setup commands) is written under the
+runner's work dir — never inside the user's repository — so a git worktree is set up once per
+commit and a local project is re-set-up whenever its HEAD or its setup commands change. The
+checkout identity (inode/mtime of its ``.git`` entry) changes when a pruned worktree is
+re-created at the same path, so a fresh checkout never inherits a stale "already set up".
 """
 
 from __future__ import annotations
@@ -16,7 +18,22 @@ from dataclasses import dataclass
 
 from algops.core import EnvSpec
 
-from .process import run_process
+from .process import EnvPolicy, run_process
+
+
+def checkout_identity(path: str) -> str:
+    """Changes whenever the checkout at ``path`` is deleted and re-created."""
+    dot_git = os.path.join(path, ".git")
+    try:
+        st = os.stat(dot_git)
+        if os.path.isfile(dot_git):  # a worktree: the file is written once, at `worktree add`
+            return f"wt:{st.st_ino}:{st.st_mtime_ns}"
+        return f"repo:{st.st_ino}"  # a repository's .git dir (its mtime churns on every git op)
+    except OSError:
+        try:
+            return f"dir:{os.stat(path).st_ino}"
+        except OSError:
+            return "missing"
 
 
 @dataclass
@@ -28,14 +45,16 @@ class SetupOutcome:
 
 
 class EnvSetup:
-    def __init__(self, marker_root: str) -> None:
+    def __init__(self, marker_root: str, env_policy: EnvPolicy | None = None) -> None:
         self.root = os.path.join(os.path.abspath(marker_root), "setup")
         os.makedirs(self.root, exist_ok=True)
         self._locks: dict[str, asyncio.Lock] = {}
+        self.env_policy = env_policy or EnvPolicy()
 
     def _key(self, path: str, sha: str, env: EnvSpec) -> str:
-        blob = json.dumps({"path": os.path.abspath(path), "sha": sha, "setup": env.setup,
-                           "vars": env.vars, "python": env.python}, sort_keys=True)
+        blob = json.dumps({"path": os.path.abspath(path), "identity": checkout_identity(path),
+                           "sha": sha, "setup": env.setup, "vars": env.vars, "python": env.python},
+                          sort_keys=True)
         return hashlib.sha256(blob.encode()).hexdigest()[:24]
 
     async def ensure(self, path: str, sha: str, env: EnvSpec) -> SetupOutcome:
@@ -47,7 +66,7 @@ class EnvSetup:
         async with lock:
             if os.path.isfile(marker):
                 return SetupOutcome(ok=True, cached=True)
-            proc_env = dict(os.environ)
+            proc_env = self.env_policy.environ()
             proc_env.update(env.vars)
             proc_env["ALGOPS_REPO_ROOT"] = os.path.abspath(path)
             logs: list[str] = []

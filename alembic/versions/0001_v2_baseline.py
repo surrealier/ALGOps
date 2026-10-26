@@ -151,6 +151,7 @@ def upgrade() -> None:
     op.create_table('final_result',
     sa.Column('experiment_id', sa.String(length=36), nullable=False),
     sa.Column('attempt', sa.Integer(), nullable=False),
+    sa.Column('commit_sha', sa.String(length=80), nullable=True),
     sa.Column('winning_run_id', sa.String(length=36), nullable=True),
     sa.Column('optimal_params', sa.JSON(), nullable=False),
     sa.Column('metrics', sa.JSON(), nullable=True),

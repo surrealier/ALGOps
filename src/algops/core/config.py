@@ -14,6 +14,9 @@ from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
+DEFAULT_ENROLL_TOKEN = "dev-enroll-token"
+
+
 def _split_csv(v: Any) -> Any:
     """Accept JSON lists *or* comma-separated strings for list-valued env vars."""
     if isinstance(v, str):
@@ -71,8 +74,11 @@ class MasterSettings(BaseSettings):
     checkpoint_backend: str = "sqlite"  # sqlite | postgres
     checkpoint_db: str = "./.algops/checkpoints.sqlite"
 
-    # One-time enroll token presented by slaves at registration (rotate in prod / per-UI).
-    enroll_token: str = "dev-enroll-token"
+    # Enroll token presented by runners at registration. The default only works in dev_mode.
+    enroll_token: str = DEFAULT_ENROLL_TOKEN
+    # Browser origins allowed to call the API cross-origin. None => "*" in dev_mode, none otherwise
+    # (the UI is served by the master itself, same-origin).
+    cors_origins: Annotated[list[str] | None, NoDecode] = None
 
     # How long a run command may take before the loop gives up on the slave.
     command_timeout_s: float = 600.0
@@ -92,7 +98,8 @@ class MasterSettings(BaseSettings):
     # When set, every mutating /api/v1 endpoint (except the slave protocol) needs
     # `Authorization: Bearer <api_token>` (CI, schedulers, the UI after login).
     api_token: str | None = None
-    run_retries: int = 1  # re-dispatch a run to another runner on infra failure/timeout
+    run_retries: int = 1  # re-dispatch a run to another runner when its runner dies (never on timeout)
+    queue_timeout_s: float = 86400.0  # give up on a command no runner picked up within this time
     benchmark_max_parallel: int = 0  # 0 => total online runner concurrency
     benchmark_rel_tolerance: float | None = None  # override every algorithm's regression tolerance
     scheduler_enabled: bool = True  # cron + git-watch loop in this process (enable on ONE master)
@@ -128,6 +135,11 @@ class MasterSettings(BaseSettings):
     mcp_notify: bool = False
     mcp_server_url: str | None = None
 
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _origins(cls, v: Any) -> Any:
+        return _split_csv(v)
+
 
 class SlaveSettings(BaseSettings):
     """A runner ("slave"): executes runs for any number of repositories, outbound-only."""
@@ -162,12 +174,18 @@ class SlaveSettings(BaseSettings):
     work_dir: str = "./.algops/slave_work"
     keep_checkouts: int = 20  # per project; oldest worktrees are pruned beyond this
 
+    # Environment hygiene: variables matching these globs are withheld from repository code
+    # (env.setup + entrypoints). Defaults: the runner's own settings and credential-like names.
+    # Re-allow what your algorithms legitimately need, e.g. ALGOPS_SLAVE_PASS_ENV="AWS_*,HF_TOKEN".
+    pass_env: Annotated[list[str], NoDecode] = []
+    withhold_env: Annotated[list[str] | None, NoDecode] = None  # None => built-in defaults
+
     # Promotion commits.
     git_author_name: str = "ALGOps"
     git_author_email: str = "algops@localhost"
     push_remote: str = "origin"
 
-    @field_validator("labels", "allow_projects", mode="before")
+    @field_validator("labels", "allow_projects", "pass_env", "withhold_env", mode="before")
     @classmethod
     def _lists(cls, v: Any) -> Any:
         return _split_csv(v)

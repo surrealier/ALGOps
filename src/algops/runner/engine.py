@@ -29,6 +29,7 @@ from algops.core import (
 )
 
 from .envsetup import EnvSetup
+from .process import EnvPolicy
 from .promote import promote as _promote
 from .protocol import RunOutcome, execute_run
 from .workspace import GitError, Workspace
@@ -52,12 +53,14 @@ class RunnerEngine:
         author_name: str = "ALGOps",
         author_email: str = "algops@localhost",
         push_remote: str = "origin",
+        env_policy: EnvPolicy | None = None,
     ) -> None:
         self.work_dir = os.path.abspath(work_dir)
         os.makedirs(self.work_dir, exist_ok=True)
         self.local_projects = {k: os.path.abspath(v) for k, v in (local_projects or {}).items()}
         self.workspace = Workspace(os.path.join(self.work_dir, "repos"), keep_checkouts)
-        self.setup = EnvSetup(self.work_dir)
+        self.env_policy = env_policy or EnvPolicy()
+        self.setup = EnvSetup(self.work_dir, self.env_policy)
         self.default_python = default_python or sys.executable
         self.git_enabled = git_enabled
         self.author_name = author_name
@@ -111,8 +114,8 @@ class RunnerEngine:
             if not repo.url:
                 return SyncResult(ok=False, error="git project without url")
             sha = await self.workspace.resolve(repo.url, repo.ref)
-            co = await self.workspace.checkout(repo.url, sha)
-            manifest = self._manifest(co.path, immutable=True)
+            async with self.workspace.use(repo.url, sha) as co:
+                manifest = self._manifest(co.path, immutable=True)
             return SyncResult(ok=True, sha=sha, ref=repo.ref, manifest=manifest_to_wire(manifest))
         except (GitError, ManifestError, OSError) as exc:
             return SyncResult(ok=False, error=str(exc))
@@ -121,7 +124,8 @@ class RunnerEngine:
 
     async def run(self, req: RunRequest) -> RunOutcome:
         repo = req.repo
-        path: str | None
+        path: str | None = None
+        acquired = False
         try:
             if repo is None or repo.kind == "local":
                 path = self._local_path(repo)
@@ -130,21 +134,34 @@ class RunnerEngine:
                     return self._infra(req, f"local project {name!r} is not served by this runner")
                 rev = await Workspace.local_revision(path)
                 sha = rev.sha
+                if repo is not None and repo.sha and repo.sha != sha:
+                    return self._fail(req, "setup", (
+                        f"local project {repo.name!r} changed since it was synced: pinned "
+                        f"{repo.sha[:20]}, on disk {sha[:20]}. Re-sync the project (or re-run) to "
+                        "evaluate the current code. Files the program or env.setup writes inside the "
+                        "repository count as changes — write outputs to $ALGOPS_OUTPUT_DIR and "
+                        ".gitignore build outputs."), sha=sha)
                 manifest = self._manifest(path, immutable=False)
             else:
                 if not self.git_enabled:
                     return self._infra(req, "git is disabled on this runner")
                 if not repo.url or not repo.sha:
                     return self._infra(req, "git run without url/sha (the master pins every run)")
-                co = await self.workspace.checkout(repo.url, repo.sha)
+                co = await self.workspace.checkout(repo.url, repo.sha)  # returned acquired
+                acquired = True
                 path, sha = co.path, co.sha
                 manifest = self._manifest(path, immutable=True)
         except GitError as exc:
+            if acquired and path:
+                self.workspace.release(path)
             return self._infra(req, str(exc))
         except ManifestError as exc:
+            if acquired and path:
+                self.workspace.release(path)
             return self._fail(req, "setup", str(exc))
 
-        self.workspace.acquire(path)
+        if not acquired:
+            self.workspace.acquire(path)
         try:
             setup = await self.setup.ensure(path, sha, manifest.env)
             if not setup.ok:
@@ -154,7 +171,7 @@ class RunnerEngine:
                 return out
             return await execute_run(req, repo_root=path, manifest=manifest,
                                      work_dir=self.work_dir, commit_sha=sha,
-                                     default_python=self.default_python)
+                                     default_python=self.default_python, env_policy=self.env_policy)
         finally:
             self.workspace.release(path)
 
@@ -166,8 +183,8 @@ class RunnerEngine:
     # ------------------------------------------------------------------ helpers
 
     @staticmethod
-    def _fail(req: RunRequest, kind: str, error: str) -> RunOutcome:
-        return RunOutcome(result=RunResult(run_id=req.run_id, status=RunStatus.failed,
+    def _fail(req: RunRequest, kind: str, error: str, sha: str | None = None) -> RunOutcome:
+        return RunOutcome(result=RunResult(run_id=req.run_id, status=RunStatus.failed, commit_sha=sha,
                                            error=error, error_kind=kind))  # type: ignore[arg-type]
 
     def _infra(self, req: RunRequest, error: str) -> RunOutcome:

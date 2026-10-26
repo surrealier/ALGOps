@@ -10,6 +10,7 @@ one commit* on *one suite* with one parameter set, and reports arbitrary named m
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -55,6 +56,36 @@ class Metrics(BaseModel):
 
 # --------------------------------------------------------------------------- repo refs
 
+_REF_BAD = re.compile(r"[\s\x00-\x1f\x7f~^:?*\[\\]|\.\.|@\{|//")
+_URL_BAD = re.compile(r"[\s\x00-\x1f\x7f]")
+
+
+def check_git_ref(value: str | None) -> str | None:
+    """A branch / tag / sha that is safe to pass to git (never an option, no revision syntax)."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if value.startswith("-") or value.startswith("/") or value.endswith((".", "/", ".lock")) \
+            or _REF_BAD.search(value) or len(value) > 255:
+        raise ValueError(f"invalid git ref {value!r}")
+    return value
+
+
+def check_git_url(value: str | None) -> str | None:
+    """A clone URL: no leading '-' (never an option), no whitespace/control characters."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if value.startswith("-") or _URL_BAD.search(value) or len(value) > 2048:
+        raise ValueError(f"invalid git url {value!r}")
+    if value.lower().startswith("ext::") or value.lower().startswith("fd::"):
+        raise ValueError(f"git transport not allowed: {value!r}")
+    return value
+
 
 class RepoRef(BaseModel):
     """Where a project's code lives. ``git``: cloned by the runner; ``local``: a path on the
@@ -65,6 +96,16 @@ class RepoRef(BaseModel):
     url: str | None = None  # git url (git) — local projects keep their path runner-side
     ref: str | None = None  # branch / tag / sha to resolve (None => remote default branch)
     sha: str | None = None  # resolved commit (runs are always pinned to a sha)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        return check_git_url(v)
+
+    @field_validator("ref")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        return check_git_ref(v)
 
 
 # --------------------------------------------------------------------------- run protocol
@@ -255,12 +296,32 @@ class ProjectCreate(BaseModel):
     default_ref: str | None = None  # None => the remote's default branch
     watch: bool = False  # benchmark automatically when the default ref moves
 
+    @field_validator("repo_url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        return check_git_url(v)
+
+    @field_validator("default_ref")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        return check_git_ref(v)
+
 
 class ProjectUpdate(BaseModel):
     description: str | None = None
     default_ref: str | None = None
     watch: bool | None = None
     repo_url: str | None = None
+
+    @field_validator("repo_url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        return check_git_url(v)
+
+    @field_validator("default_ref")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        return check_git_ref(v)
 
 
 class ProjectOut(BaseModel):
@@ -310,6 +371,12 @@ class ExperimentCreate(BaseModel):
     batch_size: int = Field(default=1, ge=1, le=64)  # candidates evaluated per iteration
     seed: int = 0
     ref: str | None = None  # None => project default ref
+
+    @field_validator("ref")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        return check_git_ref(v)
+
     # --- v1 (still accepted) ---
     target_metric: str = MetricName.fp_rate.value
     target_value: float | None = 0.1
@@ -370,6 +437,8 @@ class RunOut(BaseModel):
 
 class FinalResultOut(BaseModel):
     experiment_id: str
+    attempt: int = 0
+    commit_sha: str | None = None
     winning_run_id: str | None
     optimal_params: dict[str, Any]
     metrics: dict[str, float] | None
@@ -397,6 +466,11 @@ class BenchmarkScope(BaseModel):
     algorithms: list[str] | None = None
     suites: list[str] | None = None
     tags: list[str] | None = None
+
+    @field_validator("ref")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        return check_git_ref(v)
 
 
 class BenchmarkCreate(BaseModel):

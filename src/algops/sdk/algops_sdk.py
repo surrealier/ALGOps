@@ -222,7 +222,13 @@ def write_result(res, path=None):
 
 # --------------------------------------------------------------------------- normalization
 
-_RESERVED = {"metrics", "counts", "n_items", "telemetry", "extra", "status", "error", "protocol"}
+# A returned dict is a protocol result when it has one of these keys; otherwise, if every value
+# is a number, it is a bare {metric: value} mapping — so metrics named "error" or "extra" work.
+_STRUCTURAL = ("metrics", "counts", "status", "protocol")
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _normalize(ret, ctx):
@@ -233,10 +239,12 @@ def _normalize(ret, ctx):
         ret = _from_v1(ret.model_dump(mode="json"), ctx)
     if not isinstance(ret, dict):
         return failed("entrypoint returned %s, expected a dict" % type(ret).__name__)
-    if not (set(ret) & _RESERVED):  # a bare {metric: value} mapping
-        ret = result(metrics=ret)
+    if not any(k in ret for k in _STRUCTURAL) and ret and all(_is_number(v) for v in ret.values()):
+        ret = result(metrics=ret)  # a bare {metric: value} mapping
     ret = dict(ret)
     ret.setdefault("protocol", PROTOCOL_RESULT)
+    if "status" not in ret and isinstance(ret.get("error"), str) and ret["error"]:
+        ret["status"] = "failed"
     ret.setdefault("status", "ok")
     ret.setdefault("metrics", {})
     if ret.get("telemetry") is None:

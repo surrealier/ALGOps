@@ -2,7 +2,8 @@
 
 * **gate_failed** — a declared gate (``recall >= 0.85``) is not met (or the metric is missing).
 * **regressed**   — every gate passes, but a tracked metric moved in its *worse* direction by
-  more than its tolerance ``max(abs_tolerance[m], rel_tolerance * |baseline|)``.
+  more than its tolerance ``max(abs_tolerance[m], rel_tolerance * |baseline|, NOISE_FLOOR)``,
+  or a tracked metric the baseline reported is no longer reported (status ``lost``).
 * **improved**    — gates pass, nothing regressed, and some tracked metric got better beyond
   tolerance.
 * **passed**      — otherwise; **error** when the run itself failed.
@@ -15,6 +16,10 @@ from __future__ import annotations
 from typing import Any
 
 from algops.core import AlgorithmSpec, Constraint, GoalDirection, Verdict, resolve_direction
+
+# Absolute floor under every tolerance: float noise around a zero baseline (fp_rate 0.0 -> 1e-12)
+# is not a regression. Real zero-baseline sensitivity is set per metric with abs_tolerance.
+NOISE_FLOOR = 1e-9
 
 
 def evaluate_gates(gates: list[Constraint], metrics: dict[str, float]) -> list[dict[str, Any]]:
@@ -46,10 +51,13 @@ def compare_to_baseline(
         cur, base = metrics.get(name), baseline.get(name)
         direction = resolve_direction(name, declared)
         if cur is None or base is None:
+            # lost: the baseline had it, this run does not -> treated as a regression
+            # new:  first time reported; absent: neither run reports it
+            status = "lost" if base is not None else ("new" if cur is not None else "absent")
             out[name] = {"current": cur, "baseline": base, "delta": None, "tolerance": None,
-                         "direction": direction.value, "status": "missing"}
+                         "direction": direction.value, "status": status}
             continue
-        tol = max(float(policy.abs_tolerance.get(name, 0.0)), rel * abs(base))
+        tol = max(float(policy.abs_tolerance.get(name, 0.0)), rel * abs(base), NOISE_FLOOR)
         delta = cur - base
         worse = delta > tol if direction is GoalDirection.minimize else delta < -tol
         better = delta < -tol if direction is GoalDirection.minimize else delta > tol
@@ -67,7 +75,7 @@ def decide(run_ok: bool, gates: list[dict[str, Any]], deltas: dict[str, dict[str
     if any(not g["passed"] for g in gates):
         return Verdict.gate_failed
     statuses = {d["status"] for d in deltas.values()}
-    if "regressed" in statuses:
+    if "regressed" in statuses or "lost" in statuses:
         return Verdict.regressed
     if "improved" in statuses:
         return Verdict.improved

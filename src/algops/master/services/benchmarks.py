@@ -227,8 +227,9 @@ async def run_benchmark(ctx: MasterContext, benchmark_id: str) -> str:
             if not results:
                 b.error = "no cells (no projects in scope, or every sync failed)"
     try:
-        notify_benchmark_complete(ctx.settings, dedup_key=f"benchmark:{benchmark_id}", name=name,
-                                  status=status.value, summary=summary, failing=failing)
+        await asyncio.to_thread(
+            notify_benchmark_complete, ctx.settings, dedup_key=f"benchmark:{benchmark_id}", name=name,
+            status=status.value, summary=summary, failing=failing)
     except Exception:  # noqa: BLE001
         pass
     await ctx.ws.publish(benchmark_id, {"type": "benchmark_done", "benchmark_id": benchmark_id,

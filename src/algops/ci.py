@@ -22,6 +22,40 @@ def _fmt(metrics: dict | None) -> str:
     return ", ".join(f"{k}={v:.4g}" for k, v in list(metrics.items())[:5])
 
 
+class _ApiFailure(Exception):
+    pass
+
+
+_TRANSIENT = (429, 500, 502, 503, 504)
+
+
+def _get_json(c: httpx.Client, url: str, *, retries: int = 8, backoff_s: float = 2.0) -> dict:
+    """GET + decode with retries for proxies/restarts (5xx, HTML error pages, dropped connections).
+
+    Persistent failure raises ``_ApiFailure`` -> exit 2 ("could not determine the verdict"),
+    never an exit 1 that would read as "the benchmark failed".
+    """
+    last = "no response"
+    for attempt in range(retries + 1):
+        try:
+            r = c.get(url)
+            if r.status_code in _TRANSIENT:
+                last = f"HTTP {r.status_code}"
+            elif r.status_code >= 400:
+                raise _ApiFailure(f"GET {url}: HTTP {r.status_code} {r.text[:200]}")
+            else:
+                try:
+                    return r.json()
+                except ValueError:
+                    last = f"non-JSON response ({r.text[:80]!r})"
+        except httpx.HTTPError as exc:
+            last = f"{type(exc).__name__}: {exc}"
+        if attempt < retries:
+            print(f"warning: GET {url} failed ({last}); retrying", file=sys.stderr, flush=True)
+            time.sleep(min(30.0, backoff_s * (attempt + 1)))
+    raise _ApiFailure(f"GET {url}: {last} (after {retries + 1} attempts)")
+
+
 def run_ci(*, master_url: str, token: str | None, project: list[str] | None, ref: str | None,
            algorithms: list[str] | None, suites: list[str] | None, tags: list[str] | None,
            wait: bool = True, timeout_s: float = 3600.0, json_out: str | None = None,
@@ -41,8 +75,7 @@ def run_ci(*, master_url: str, token: str | None, project: list[str] | None, ref
                 if r.status_code == 404:
                     print(f"error: project {ident!r} not found on {master_url}", file=sys.stderr)
                     return 2
-                r.raise_for_status()
-                item: dict = {"project_id": r.json()["project_id"]}
+                item: dict = {"project_id": _get_json(c, f"/api/v1/projects/{ident}")["project_id"]}
                 if ref:
                     item["ref"] = ref
                 if algorithms:
@@ -57,15 +90,19 @@ def run_ci(*, master_url: str, token: str | None, project: list[str] | None, ref
         if r.status_code >= 400:
             print(f"error: {r.status_code} {r.text[:300]}", file=sys.stderr)
             return 2
-        bid = r.json()["benchmark_id"]
+        try:
+            bid = r.json()["benchmark_id"]
+        except (ValueError, KeyError):
+            print(f"error: unexpected response {r.status_code} {r.text[:200]!r}", file=sys.stderr)
+            return 2
         print(f"benchmark {bid} started on {master_url}", flush=True)
         if not wait:
             return 0
         deadline = time.monotonic() + timeout_s
         doc = None
         while time.monotonic() < deadline:
-            doc = c.get(f"/api/v1/benchmarks/{bid}").json()
-            if doc["status"] in ("passed", "failed", "error"):
+            doc = _get_json(c, f"/api/v1/benchmarks/{bid}", backoff_s=max(poll_s, 0.01))
+            if doc.get("status") in ("passed", "failed", "error"):
                 break
             time.sleep(poll_s)
         else:
@@ -84,6 +121,8 @@ def run_ci(*, master_url: str, token: str | None, project: list[str] | None, ref
             for m, d in (cell.get("deltas") or {}).items():
                 if d.get("status") == "regressed":
                     line += f"\n      regressed {m}: {d['baseline']:.4g} → {d['current']:.4g}"
+                elif d.get("status") == "lost":
+                    line += f"\n      regressed {m}: {d['baseline']:.4g} → (not reported)"
             print(line)
         summary = ", ".join(f"{k}={v}" for k, v in (doc.get("summary") or {}).items() if v)
         print(f"\n{doc['status'].upper()} — {summary}")
@@ -91,8 +130,8 @@ def run_ci(*, master_url: str, token: str | None, project: list[str] | None, ref
             with open(json_out, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh, ensure_ascii=False, indent=2)
         return 0 if doc["status"] == "passed" else 1
-    except httpx.HTTPError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except (httpx.HTTPError, _ApiFailure, ValueError, KeyError) as exc:
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     finally:
         if own:

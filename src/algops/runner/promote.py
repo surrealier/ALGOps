@@ -22,7 +22,9 @@ from ruamel.yaml import YAML
 from algops.core import PromoteRequest, PromoteResult, load_manifest
 from algops.core.manifest import find_manifest
 
-from .workspace import GitError, Workspace, git
+from algops.core.schemas import check_git_ref
+
+from .workspace import SHA_RE, GitError, Workspace, git
 
 
 def _yaml() -> YAML:
@@ -54,15 +56,41 @@ def _same(a: Any, b: Any) -> bool:
         return a == b
 
 
-def _typed(new: Any, old: Any) -> Any:
-    """Keep the YAML scalar type of the old default (int stays int, float stays float)."""
+def _typed(new: Any, old: Any, dtype: Any = None) -> Any:
+    """The value as the parameter's declared ``dtype`` (falls back to the old default's type).
+
+    The dtype wins over the YAML scalar: a float parameter written as ``default: 1`` must
+    receive the tuned ``1.5``, not a rounded ``2``.
+    """
+    dtype = str(dtype or "").lower()
+    if dtype == "float":
+        return float(new)
+    if dtype == "int":
+        return int(round(float(new)))
+    if dtype == "bool":
+        if isinstance(new, str):
+            return new.strip().lower() in ("1", "true", "yes", "on")
+        return bool(new)
+    if dtype == "enum":
+        return new
     if isinstance(old, bool):
         return bool(new)
     if isinstance(old, int) and not isinstance(old, bool):
-        return int(round(float(new)))
+        return int(round(float(new))) if float(new).is_integer() else float(new)
     if isinstance(old, float):
         return float(new)
     return new
+
+
+def _type_ok(value: Any, dtype: Any) -> bool:
+    dtype = str(dtype or "").lower()
+    if dtype == "float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if dtype == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if dtype == "bool":
+        return isinstance(value, bool)
+    return True
 
 
 def _yaml_scalar(value: Any) -> str:
@@ -141,7 +169,9 @@ def rewrite_defaults(path: str, algorithm_id: str, inline: bool,
         old = item.get("default")
         if _same(old, new):
             continue
-        typed = _typed(new, old)
+        typed = _typed(new, old, item.get("dtype"))
+        if _same(old, typed) and type(old) is type(typed):
+            continue
         changed[key] = {"old": old, "new": typed}
         try:
             line, col = item.lc.value("default")
@@ -170,9 +200,21 @@ def rewrite_defaults(path: str, algorithm_id: str, inline: bool,
         buf = io.StringIO()
         y.dump(doc, buf)
         text = buf.getvalue()
+    _verify(text, algorithm_id, inline, changed, {k: by_key[k].get("dtype") for k in changed})
     with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
     return changed
+
+
+def _verify(text: str, algorithm_id: str, inline: bool, changed: dict[str, dict[str, Any]],
+            dtypes: dict[str, Any]) -> None:
+    """Re-read the rewritten YAML as a plain loader would and check every proposed default."""
+    got = {str(i.get("key")): i.get("default")
+           for i in _param_items(yaml.safe_load(text), algorithm_id, inline) if hasattr(i, "get")}
+    bad = [k for k, c in changed.items()
+           if not _same(got.get(k), c["new"]) or not _type_ok(got.get(k), dtypes.get(k))]
+    if bad:
+        raise ValueError(f"rewritten defaults do not read back correctly for {bad} — refusing to commit")
 
 
 async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str | None,
@@ -182,14 +224,23 @@ async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str 
         return PromoteResult(ok=False, base_sha=base,
                              error="promotion needs a clean committed base sha (campaign ran on "
                                    "uncommitted/local code — commit it and re-run the campaign)")
+    if not SHA_RE.match(base):
+        return PromoteResult(ok=False, base_sha=base, error=f"invalid base sha {base!r}")
+    try:
+        check_git_ref(req.branch)
+    except ValueError as exc:
+        return PromoteResult(ok=False, base_sha=base, error=str(exc))
     if req.repo.kind == "git":
         if not req.repo.url:
             return PromoteResult(ok=False, error="git project without url")
-        git_dir_args = ["--git-dir", await workspace.ensure_mirror(req.repo.url, fetch=False)]
+        mirror = await workspace.ensure_mirror(req.repo.url, fetch=False)
+        git_dir_args = ["--git-dir", mirror]
+        wt_lock = workspace.worktree_lock(mirror)
     else:
         if not local_path:
             return PromoteResult(ok=False, error=f"local project {req.repo.name!r} not served here")
         git_dir_args = ["-C", local_path]
+        wt_lock = workspace.worktree_lock(local_path)
 
     tmp = tempfile.mkdtemp(prefix="algops_promote_")
     wt = os.path.join(tmp, "wt")
@@ -199,7 +250,8 @@ async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str 
     }
     try:
         try:
-            await git(*git_dir_args, "worktree", "add", "-B", req.branch, wt, base, timeout=600)
+            async with wt_lock:
+                await git(*git_dir_args, "worktree", "add", "-B", req.branch, wt, base, timeout=600)
         except GitError as exc:
             return PromoteResult(ok=False, base_sha=base, error=str(exc))
         manifest = load_manifest(wt)
@@ -215,8 +267,8 @@ async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str 
             return PromoteResult(ok=False, base_sha=base, error=f"{algo.id} declares no params")
         try:
             changed = rewrite_defaults(target, algo.id, inline, req.params)
-        except KeyError as exc:
-            return PromoteResult(ok=False, base_sha=base, error=str(exc))
+        except (KeyError, ValueError) as exc:
+            return PromoteResult(ok=False, base_sha=base, error=str(exc).strip("'\""))
         if not changed:
             return PromoteResult(ok=False, base_sha=base, error="best parameters equal the current defaults — nothing to propose")
         # Re-validate the edited spec before committing (never propose a broken params file).
@@ -242,7 +294,8 @@ async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str 
         return PromoteResult(ok=False, base_sha=base, error=f"{type(exc).__name__}: {exc}")
     finally:
         try:
-            await git(*git_dir_args, "worktree", "remove", "--force", wt, timeout=120)
+            async with wt_lock:
+                await git(*git_dir_args, "worktree", "remove", "--force", wt, timeout=120)
         except Exception:  # noqa: BLE001
             pass
         shutil.rmtree(tmp, ignore_errors=True)

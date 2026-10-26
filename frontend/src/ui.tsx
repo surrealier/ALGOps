@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ApiError } from "./api";
+import { ApiError, api } from "./api";
 
 // ---------------------------------------------------------------- formatting
 
@@ -123,6 +123,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], pollMs?: numb
       setData(d);
       setError(null);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 401) askToken();
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -260,7 +261,10 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 export function TextArtifact({ uri }: { uri: string }) {
   const [text, setText] = useState<string>("불러오는 중…");
   useEffect(() => {
-    fetch(`/api/v1/artifacts?uri=${encodeURIComponent(uri)}`).then((r) => r.text()).then(setText).catch(() => setText("불러오지 못했습니다."));
+    api.artifact(uri).then(setText).catch((e) => {
+      if (e instanceof ApiError && e.status === 401) { askToken(); setText("API 토큰이 필요합니다."); }
+      else setText("불러오지 못했습니다.");
+    });
   }, [uri]);
   return <pre className="artifact">{text}</pre>;
 }

@@ -6,7 +6,6 @@ to the browser over WebSocket, indexes RAG memory, and fires the deterministic n
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from algops.core import MasterSettings, Objective
@@ -100,17 +99,13 @@ class DbHooks:
         return uri
 
     def fetch_text(self, uri: str | None) -> str | None:
-        if not uri:
+        """Artifacts only (``algops://``): URIs come from runner uploads, never read master files."""
+        if not uri or not uri.startswith(SCHEME):
             return None
-        if uri.startswith(SCHEME):
-            try:
-                return self.store.get_text(uri)
-            except Exception:  # noqa: BLE001
-                return None
-        if os.path.exists(uri):
-            with open(uri, encoding="utf-8") as fh:
-                return fh.read()
-        return None
+        try:
+            return self.store.get_text(uri)
+        except Exception:  # noqa: BLE001
+            return None
 
     def on_iteration(
         self, *, iteration, analyst_findings, pm_action, stop_reason, rationale, proposed_run_id
@@ -151,6 +146,9 @@ class DbHooks:
             algorithm_id=self.algorithm_id,
         )
         with get_session() as s:
+            win = repo.get_run(s, winning_run_id) if winning_run_id else None
+            exp = repo.get_experiment(s, self.experiment_id)
+            commit_sha = (win.commit_sha if win is not None else None) or (exp.commit_sha if exp else None)
             repo.upsert_final_result(
                 s,
                 experiment_id=self.experiment_id,
@@ -164,6 +162,7 @@ class DbHooks:
                 attempt=self.attempt,
                 validation=validation or None,
                 changed_params=changed_params or {},
+                commit_sha=commit_sha,
             )
             if winning_run_id:
                 repo.set_best_run(s, self.experiment_id, winning_run_id)

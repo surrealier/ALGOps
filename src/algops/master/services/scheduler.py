@@ -127,15 +127,23 @@ class Scheduler:
                 row.next_fire_at = _utc(next_cron(sc["cron"], now))
         return bid
 
-    async def _changed_projects(self, project_ids: list[str], last_seen: dict[str, str]) -> tuple[list[dict], dict[str, str]]:
+    async def _changed_projects(self, targets: list[str | tuple[str, str | None]],
+                                last_seen: dict[str, str]) -> tuple[list[dict], dict[str, str]]:
+        """Sync each (project, ref) and report those whose resolved sha moved since ``last_seen``.
+
+        ``last_seen`` is keyed by project id for the default ref and ``<project_id>@<ref>``
+        for an explicit ref, so watching ``release`` never compares against ``main``.
+        """
         changed: list[dict] = []
         seen = dict(last_seen)
-        for pid in project_ids:
-            rev, _err = await sync_project(self.ctx, pid, None)
+        for target in targets:
+            pid, ref = (target, None) if isinstance(target, str) else target
+            key = pid if not ref else f"{pid}@{ref}"
+            rev, _err = await sync_project(self.ctx, pid, ref)
             if rev is None:
                 continue
-            prev = seen.get(pid)
-            seen[pid] = rev.sha
+            prev = seen.get(key)
+            seen[key] = rev.sha
             if prev is not None and prev != rev.sha:
                 changed.append({"project_id": pid, "ref": rev.sha})
         return changed, seen
@@ -146,11 +154,12 @@ class Scheduler:
             return None
         scope = sc["scope"] or []
         with get_session() as s:
-            pids = [x["project_id"] for x in scope] if scope else [p.project_id for p in repo.list_projects(s)]
-        changed, seen = await self._changed_projects(pids, sc["last_seen"])
+            targets = ([(x["project_id"], x.get("ref") or None) for x in scope] if scope
+                       else [(p.project_id, None) for p in repo.list_projects(s)])
+        changed, seen = await self._changed_projects(targets, sc["last_seen"])
         bid = None
         if changed:
-            filters = {x["project_id"]: x for x in scope}
+            filters = {x["project_id"]: {k: v for k, v in x.items() if k != "ref"} for x in scope}
             items = [{**filters.get(c["project_id"], {}), **c} for c in changed]
             bid = start_benchmark(self.ctx, name=f"{sc['name']} — 새 커밋", scope=items,
                                   baseline="previous", trigger="watch", schedule_id=sc["id"])

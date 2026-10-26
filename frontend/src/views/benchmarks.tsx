@@ -119,7 +119,7 @@ function CellDetail({ c, onClose, onAccepted }: { c: Cell; onClose: () => void; 
                 <tbody>{Object.entries(c.deltas).map(([m, d]) => (
                   <tr key={m}><td><code>{m}</code> <span className="muted sm">{d.direction === "minimize" ? "↓" : "↑"}</span></td>
                     <td>{fmt(d.baseline)}</td><td>{fmt(d.current)}</td><td>{fmt(d.delta, 3)}</td><td>{fmt(d.tolerance, 2)}</td>
-                    <td><span className={`pill ${d.status === "regressed" ? "warn" : d.status === "improved" ? "acc" : ""}`}>{d.status}</span></td></tr>
+                    <td><span className={`pill ${d.status === "regressed" || d.status === "lost" ? "warn" : d.status === "improved" ? "acc" : ""}`}>{d.status}</span></td></tr>
                 ))}</tbody></table>
             </>
           )}
@@ -234,7 +234,7 @@ export function BenchmarkDetail({ id }: { id: string }) {
                 <VerdictBadge v={c.verdict} /> <b>{c.project_name}</b> · {c.algorithm_id} @ {c.suite_id}
                 <span className="muted sm"> — {c.error?.split("\n")[0]
                   || c.gates.filter((g) => !g.passed).map((g) => `${g.metric} ${opText(g.op)} ${g.value} (실제 ${fmt(g.actual, 3)})`).join(", ")
-                  || Object.entries(c.deltas).filter(([, d]) => d.status === "regressed").map(([m, d]) => `${m} ${fmt(d.baseline, 3)} → ${fmt(d.current, 3)}`).join(", ")}</span>
+                  || Object.entries(c.deltas).filter(([, d]) => d.status === "regressed" || d.status === "lost").map(([m, d]) => `${m} ${fmt(d.baseline, 3)} → ${fmt(d.current, 3)}`).join(", ")}</span>
               </li>
             ))}
           </ul>

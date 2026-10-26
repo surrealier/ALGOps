@@ -30,6 +30,7 @@ from algops.core import (
     SyncResult,
 )
 from algops.runner import RunnerEngine, bundled_toy_path
+from algops.runner.process import DEFAULT_WITHHELD_ENV, EnvPolicy
 from algops.runner.protocol import RunOutcome
 
 from .client import MasterClient
@@ -44,6 +45,11 @@ def local_project_map(settings: SlaveSettings) -> dict[str, str]:
     return projects
 
 
+def env_policy(settings: SlaveSettings) -> EnvPolicy:
+    withhold = tuple(settings.withhold_env) if settings.withhold_env is not None else DEFAULT_WITHHELD_ENV
+    return EnvPolicy(withhold=withhold, pass_env=tuple(settings.pass_env))
+
+
 def build_engine(settings: SlaveSettings) -> RunnerEngine:
     return RunnerEngine(
         settings.work_dir,
@@ -53,6 +59,7 @@ def build_engine(settings: SlaveSettings) -> RunnerEngine:
         author_name=settings.git_author_name,
         author_email=settings.git_author_email,
         push_remote=settings.push_remote,
+        env_policy=env_policy(settings),
     )
 
 
@@ -210,6 +217,10 @@ async def run_slave(settings: SlaveSettings | None = None) -> None:
     settings = settings or SlaveSettings()
     os.makedirs(settings.work_dir, exist_ok=True)
     runner = Runner(settings)
+    withheld = runner.engine.env_policy.withheld()
+    if withheld:
+        print(f"[runner] 저장소 코드에 전달하지 않는 환경변수 {len(withheld)}개: {', '.join(withheld[:12])}"
+              f"{' …' if len(withheld) > 12 else ''} (필요하면 ALGOPS_SLAVE_PASS_ENV로 허용)", flush=True)
     await runner.register()
     tasks = [asyncio.create_task(runner.heartbeat_loop())]
     tasks += [asyncio.create_task(runner.worker(i)) for i in range(max(1, settings.concurrency))]

@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-20232A?logo=react&logoColor=61DAFB)](https://react.dev/)
 ![contract](https://img.shields.io/badge/contract-v2-4f9cf9)
-![tests](https://img.shields.io/badge/tests-80%20passing-3fb950)
+![tests](https://img.shields.io/badge/tests-113%20passing-3fb950)
 
 [Why](#-why) · [Quick start](#-quick-start) · [Onboard a repo](#-onboard-a-repository) · [Benchmarks](#-benchmarks--regressions) · [Campaigns](#-optimization-campaigns) · [Deploy](#-deployment) · [Docs](#-docs)
 
@@ -59,7 +59,7 @@ No Docker, no GPU.
 
 ```bash
 uv sync
-uv run pytest                                   # 80 tests, no external services
+uv run pytest                                   # 113 tests, no external services
 
 uv run algops test examples/py-multi-algo       # 2 algorithms × 2 suites each, gates applied
 uv run algops test examples/c-threshold         # a C program compiled by env.setup

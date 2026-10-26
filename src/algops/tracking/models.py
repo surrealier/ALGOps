@@ -17,6 +17,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+
+# Python None -> SQL NULL (plain JSON stores the JSON literal `null`, which `IS NOT NULL` filters
+# would then treat as a value).
+NullableJSON = JSON(none_as_null=True)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -34,7 +38,7 @@ class Project(Base):
     modality: Mapped[str] = mapped_column(String(32), default="tabular")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # v1: the single algorithm's param spec (kept in sync with the latest revision's "default").
-    param_spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    param_spec: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     summary_md_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # v2: where the code lives.
     repo_kind: Mapped[str] = mapped_column(String(16), default="local")  # git | local
@@ -76,12 +80,12 @@ class Slave(Base):
     host_label: Mapped[str] = mapped_column(String(255), default="unknown")
     status: Mapped[str] = mapped_column(String(16), default="offline")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    labels: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
     concurrency: Mapped[int] = mapped_column(Integer, default=1)
     inflight: Mapped[int] = mapped_column(Integer, default=0)
     git: Mapped[bool] = mapped_column(Boolean, default=True)
-    allow_projects: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    local_projects: Mapped[list | None] = mapped_column(JSON, nullable=True)  # project names
+    allow_projects: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
+    local_projects: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)  # project names
     version: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -104,14 +108,14 @@ class Experiment(Base):
     # LangGraph thread = f"{experiment_id}:{attempt}" — a re-run starts a clean thread.
     langgraph_thread_id: Mapped[str] = mapped_column(String(80))
     attempt: Mapped[int] = mapped_column(Integer, default=0)
-    llm_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    llm_config: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     # v2
     algorithm_id: Mapped[str] = mapped_column(String(64), default="default")
     suite_id: Mapped[str] = mapped_column(String(64), default="default")
-    validation_suite_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    objective: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    validation_suite_ids: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
+    objective: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     strategy: Mapped[str] = mapped_column(String(32), default="coordinate")
-    search_keys: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    search_keys: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
     batch_size: Mapped[int] = mapped_column(Integer, default=1)
     seed: Mapped[int] = mapped_column(Integer, default=0)
     ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -148,7 +152,7 @@ class Run(Base):
     param_values: Mapped[dict] = mapped_column(JSON, default=dict)
     # Self-FK mirroring the Neo4j (:Run)-[:DERIVED_FROM]->(:Run) lineage edge.
     derived_from_run: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     n_items: Mapped[int | None] = mapped_column(Integer, nullable=True)
     csv_manifest_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -206,16 +210,17 @@ class FinalResult(Base):
         ForeignKey("experiment.experiment_id"), primary_key=True
     )
     attempt: Mapped[int] = mapped_column(Integer, default=0)
+    commit_sha: Mapped[str | None] = mapped_column(String(80), nullable=True)  # what the winner ran on
     winning_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     optimal_params: Mapped[dict] = mapped_column(JSON, default=dict)
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     stop_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     report_md_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     notified: Mapped[bool] = mapped_column(Boolean, default=False)
-    notify_refs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    validation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    changed_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    promotion: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    notify_refs: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
+    validation: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
+    changed_params: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
+    promotion: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -226,10 +231,10 @@ class Benchmark(Base):
     name: Mapped[str] = mapped_column(String(255), default="benchmark")
     status: Mapped[str] = mapped_column(String(16), default="created")
     trigger: Mapped[str] = mapped_column(String(16), default="manual")
-    scope: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scope: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
     baseline: Mapped[str] = mapped_column(String(64), default="previous")
-    revisions: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # project_id -> sha
-    summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    revisions: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)  # project_id -> sha
+    summary: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     schedule_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -250,11 +255,11 @@ class BenchmarkCell(Base):
     commit_sha: Mapped[str | None] = mapped_column(String(80), nullable=True)
     run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     verdict: Mapped[str] = mapped_column(String(16), default="pending")
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    gates: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
+    gates: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
     baseline_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     baseline_sha: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    deltas: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    deltas: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     # A human accepted this cell as the new baseline (e.g. an intentional trade-off).
@@ -272,10 +277,10 @@ class Schedule(Base):
     kind: Mapped[str] = mapped_column(String(16), default="cron")  # cron | watch
     cron: Mapped[str | None] = mapped_column(String(128), nullable=True)
     interval_s: Mapped[int] = mapped_column(Integer, default=300)
-    scope: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scope: Mapped[list | None] = mapped_column(NullableJSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_benchmark_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    last_seen: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # watch: project_id -> sha
+    last_seen: Mapped[dict | None] = mapped_column(NullableJSON, nullable=True)  # watch: project_id -> sha
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

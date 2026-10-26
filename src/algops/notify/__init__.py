@@ -45,7 +45,7 @@ class SlackNotifier(Notifier):
         from slack_sdk import WebClient
         from slack_sdk.errors import SlackApiError
 
-        client = WebClient(token=self.token)
+        client = WebClient(token=self.token, timeout=15)
         try:
             resp = client.chat_postMessage(channel=self.channel, text=f"*{subject}*\n{body}")
             return str(resp.get("ts", "sent"))
@@ -65,7 +65,7 @@ class EmailNotifier(Notifier):
         msg["Subject"] = subject
         msg["From"] = self.s.smtp_user or "algops@localhost"
         msg["To"] = self.s.notify_email_to or ""
-        with smtplib.SMTP(self.s.smtp_host, self.s.smtp_port) as server:
+        with smtplib.SMTP(self.s.smtp_host, self.s.smtp_port, timeout=20) as server:
             server.starttls()
             if self.s.smtp_user:
                 server.login(self.s.smtp_user, self.s.smtp_password or "")

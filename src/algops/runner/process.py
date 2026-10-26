@@ -8,14 +8,45 @@ so a chatty program cannot exhaust memory.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 LOG_LIMIT_BYTES = 2 * 1024 * 1024
+
+# Environment variables never handed to repository code (env.setup, entrypoints) unless the runner
+# explicitly allows them with ``pass_env``: the runner's / master's own settings (enroll token,
+# API token, master URL …) and anything that looks like a credential.
+DEFAULT_WITHHELD_ENV = (
+    "ALGOPS_SLAVE_*", "ALGOPS_MASTER_*", "ALGOPS_*TOKEN*", "ALGOPS_*SECRET*", "ALGOPS_*PASSWORD*",
+    "*TOKEN", "*TOKEN_*", "*SECRET*", "*PASSWORD*", "*PASSWD*", "*API_KEY*", "*PRIVATE_KEY*", "*CREDENTIAL*",
+)
+
+
+@dataclass(frozen=True)
+class EnvPolicy:
+    """Which of the runner's environment variables repository code may see."""
+
+    withhold: tuple[str, ...] = DEFAULT_WITHHELD_ENV
+    pass_env: tuple[str, ...] = field(default_factory=tuple)  # globs re-allowed (e.g. "AWS_*")
+
+    def allowed(self, name: str) -> bool:
+        upper = name.upper()
+        if any(fnmatch.fnmatchcase(upper, pat.upper()) for pat in self.pass_env):
+            return True
+        return not any(fnmatch.fnmatchcase(upper, pat.upper()) for pat in self.withhold)
+
+    def environ(self, source: dict[str, str] | None = None) -> dict[str, str]:
+        src = os.environ if source is None else source
+        return {k: v for k, v in src.items() if self.allowed(k)}
+
+    def withheld(self, source: dict[str, str] | None = None) -> list[str]:
+        src = os.environ if source is None else source
+        return sorted(k for k in src if not self.allowed(k))
 
 
 @dataclass

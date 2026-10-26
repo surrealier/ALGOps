@@ -163,6 +163,9 @@ def _trim(moves: dict, keep: int = 512) -> dict:
 # --------------------------------------------------------------------------- random
 
 
+_ENUMERATE_LIMIT = 4096  # sub-spaces up to this size are sampled exactly (without replacement)
+
+
 def _random(spec, keys, history, state, k, seed, base):
     by_key = spec.by_key()
     grids = {key: by_key[key].grid() for key in keys}
@@ -173,9 +176,21 @@ def _random(spec, keys, history, state, k, seed, base):
     rng = random.Random(f"{seed}:{draws}")
     seen = _seen(history)
     out: list[dict] = []
+    if space <= _ENUMERATE_LIMIT:
+        # Small space: list what is left of *this* sub-space (other keys at `base`) and sample it.
+        # Points evaluated elsewhere (baseline with other keys, LLM proposals) never count.
+        remaining = []
+        for combo in itertools.product(*(grids[key] for key in keys)):
+            cand = dict(base)
+            cand.update(zip(keys, combo))
+            if params_key(cand) not in seen:
+                remaining.append(cand)
+        rng.shuffle(remaining)
+        out = remaining[:k]
+        return out, {"draws": draws + 1}, not remaining
     hashes: set[str] = set()
     attempts = 0
-    while len(out) < k and attempts < 50 * k and len(seen) + len(out) < space:
+    while len(out) < k and attempts < 50 * k:
         attempts += 1
         cand = dict(base)
         for key in keys:
@@ -185,8 +200,7 @@ def _random(spec, keys, history, state, k, seed, base):
             continue
         out.append(cand)
         hashes.add(h)
-    converged = not out and len(seen) >= space
-    return out, {"draws": draws + 1}, converged
+    return out, {"draws": draws + 1}, False  # a huge space is never declared exhausted
 
 
 # --------------------------------------------------------------------------- grid

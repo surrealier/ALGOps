@@ -104,7 +104,12 @@ async def promote_experiment(ctx: MasterContext, experiment_id: str, body: Promo
         if proj is None:
             return {"ok": False, "error": "project not found"}
         changed = dict(fr.changed_params or {})
-        ref = repo_ref(proj, sha=exp.commit_sha)
+        # The base is the commit the *winning attempt* ran on — not the experiment's current pin,
+        # which a later re-run may have moved to a newer commit.
+        base_sha = fr.commit_sha or (exp.commit_sha if fr.attempt == exp.attempt else None)
+        if not base_sha:
+            return {"ok": False, "error": "the final result does not record its commit — re-run the campaign"}
+        ref = repo_ref(proj, sha=base_sha)
         objective = Objective.model_validate(exp.objective) if exp.objective else None
         metrics = normalize_metrics(fr.metrics)
         attempt = fr.attempt
@@ -113,7 +118,8 @@ async def promote_experiment(ctx: MasterContext, experiment_id: str, body: Promo
         project_id = exp.project_id
     if not changed:
         return {"ok": False, "error": "the best parameters equal the current defaults — nothing to propose"}
-    branch = f"{ctx.settings.promote_branch_prefix}{algorithm_id}/{experiment_id[:8]}-a{attempt}"
+    # UUIDv7 ids share their leading (timestamp) characters for ~a minute: use the random tail.
+    branch = f"{ctx.settings.promote_branch_prefix}{algorithm_id}/{experiment_id.replace('-', '')[-12:]}-a{attempt}"
     message = _commit_message(algorithm_id, objective, changed, metrics, experiment_id, attempt)
     push = body.push if body.push is not None else (ctx.settings.promote_push or body.pull_request)
     req = PromoteRequest(project_id=project_id, repo=ref, algorithm_id=algorithm_id,

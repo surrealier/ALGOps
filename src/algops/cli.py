@@ -177,6 +177,8 @@ def cmd_test(a: argparse.Namespace) -> int:
         for m, d in (c.get("deltas") or {}).items():
             if d["status"] == "regressed":
                 line += f"\n      regressed {m}: {d['baseline']:.4g} → {d['current']:.4g} (tol {d['tolerance']:.3g})"
+            elif d["status"] == "lost":
+                line += f"\n      regressed {m}: {d['baseline']:.4g} → (not reported)"
         print(line, flush=True)
 
     doc = asyncio.run(run_local_tests(

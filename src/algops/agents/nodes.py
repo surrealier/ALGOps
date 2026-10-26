@@ -248,7 +248,10 @@ def make_nodes(deps: LoopDeps) -> dict[str, Any]:
             return {"csv_drop_reasons": agg.get("drop_reasons", {}), "csv_n_items": agg.get("n_items", 0)}
         stage_texts: dict[str, str] = {}
         for stage in manifest.get("stages", []):
-            stage_text = hooks.fetch_text(resolve_sibling_uri(uri, stage["csv"]))
+            try:
+                stage_text = hooks.fetch_text(resolve_sibling_uri(uri, stage["csv"]))
+            except (KeyError, TypeError, ValueError):
+                continue  # malformed manifest entry — skip that stage
             if stage_text:
                 stage_texts[stage["stage"]] = stage_text
         try:
@@ -383,9 +386,12 @@ def make_nodes(deps: LoopDeps) -> dict[str, Any]:
                 decision = await deps.planner.decide(state)
             except Exception:  # noqa: BLE001
                 decision = None
-            if decision is not None:
+            if decision is not None and decision.action in ("continue", "stop"):
                 action = decision.action
-                reason = (decision.stop_reason or "pm_stop") if decision.action == "stop" else None
+                # The LLM may only *choose* to stop; it cannot claim the target was reached or
+                # that the run failed — those verdicts are computed above, deterministically.
+                if action == "stop":
+                    reason = "converged" if decision.stop_reason == "converged" else "pm_stop"
         if action is None:
             if state.get("converged"):
                 action, reason = "stop", "converged"
@@ -496,7 +502,9 @@ def make_nodes(deps: LoopDeps) -> dict[str, Any]:
                 extra.append(f"| {sid} | {fb} | {fd} | {mark} |")
         report = f"# 최종 결과 (종료 사유: {reason})\n\n" + report + ("\n".join(extra) + "\n" if extra else "")
 
-        refs = hooks.on_finalize(
+        # Off the event loop: persisting + SMTP/Slack delivery must not stall other campaigns.
+        refs = await asyncio.to_thread(
+            hooks.on_finalize,
             winning_run_id=winning,
             params=params,
             metrics=metrics,

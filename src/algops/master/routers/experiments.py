@@ -209,6 +209,8 @@ def get_final(experiment_id: str) -> FinalResultOut:
             raise HTTPException(404, "no final result yet")
         return FinalResultOut(
             experiment_id=fr.experiment_id,
+            attempt=fr.attempt or 0,
+            commit_sha=fr.commit_sha,
             winning_run_id=fr.winning_run_id,
             optimal_params=fr.optimal_params or {},
             metrics=fr.metrics or None,

@@ -1,5 +1,6 @@
 // Thin client for the master API (same-origin; the master serves the built UI at "/").
-// Mutations carry the API token (if the master has one) from localStorage.
+// When the master has an API token, every request (reads, mutations, WebSockets, artifact links)
+// carries it — from localStorage, entered once via the token dialog.
 
 export type Metrics = Record<string, number>;
 
@@ -153,12 +154,12 @@ export const api = {
   fireSchedule: (id: string) => post<{ benchmark_id?: string; changed?: boolean }>(`/api/v1/schedules/${id}/fire`),
   deleteSchedule: (id: string) => j(`/api/v1/schedules/${id}`, { method: "DELETE" }),
   artifact: (uri: string) => j<string>(`/api/v1/artifacts${q({ uri })}`),
-  artifactUrl: (uri: string) => `/api/v1/artifacts${q({ uri })}`,
+  artifactUrl: (uri: string) => `/api/v1/artifacts${q({ uri, token: token.get() })}`,
 };
 
 export function openWs(channel: "experiments" | "benchmarks", id: string, onMsg: (m: any) => void): WebSocket {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws/${channel}/${id}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/${channel}/${id}${q({ token: token.get() })}`);
   ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch { /* ignore */ } };
   return ws;
 }

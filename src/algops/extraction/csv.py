@@ -27,7 +27,15 @@ _FEATURE_PREFIXES = ("feat_", "dfeat_", "ai_")
 
 
 def resolve_sibling_uri(manifest_uri: str, filename: str) -> str:
-    """Given a manifest uri/path, return the uri/path of a sibling stage CSV."""
+    """Given a manifest uri/path, return the uri/path of a sibling stage CSV.
+
+    ``filename`` comes from a program-written manifest, so it must stay next to the manifest:
+    a relative path without ``..`` segments (raises ``ValueError`` otherwise).
+    """
+    name = str(filename or "").replace("\\", "/")
+    if not name or name.startswith("/") or ":" in name or any(p in ("", ".", "..") for p in name.split("/")):
+        raise ValueError(f"invalid telemetry stage file name {filename!r}")
+    filename = name
     if "://" in manifest_uri:
         return manifest_uri.rsplit("/", 1)[0] + "/" + filename
     return os.path.join(os.path.dirname(manifest_uri), filename)

@@ -25,9 +25,9 @@ x-master-env: &master-env
   ALGOPS_MASTER_NEO4J_URI: "bolt://neo4j:7687"
   ALGOPS_MASTER_NEO4J_USER: "neo4j"
   ALGOPS_MASTER_NEO4J_PASSWORD: "algops-neo4j"
-  ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-change-me}"
+  ALGOPS_MASTER_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:?set ALGOPS_ENROLL_TOKEN}"
   # Mutating API calls (UI actions, `algops ci`) need this bearer token.
-  ALGOPS_MASTER_API_TOKEN: "${ALGOPS_API_TOKEN:-change-me-too}"
+  ALGOPS_MASTER_API_TOKEN: "${ALGOPS_API_TOKEN:?set ALGOPS_API_TOKEN}"
   # Promotion: push proposal branches from the runners and open PRs/MRs from the master.
   ALGOPS_MASTER_PROMOTE_PUSH: "${ALGOPS_PROMOTE_PUSH:-false}"
   ALGOPS_MASTER_GIT_PROVIDER: "${ALGOPS_GIT_PROVIDER:-}"          # github | gitlab

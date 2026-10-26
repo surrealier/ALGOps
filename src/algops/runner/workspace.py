@@ -19,6 +19,8 @@ import shutil
 import time
 from dataclasses import dataclass
 
+from algops.core.schemas import check_git_ref, check_git_url
+
 from .process import run_process
 
 SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -104,7 +106,8 @@ class Workspace:
                 os.makedirs(os.path.dirname(mirror), exist_ok=True)
                 tmp = mirror + ".partial"
                 shutil.rmtree(tmp, ignore_errors=True)
-                await git("clone", "--mirror", "--quiet", url, tmp, timeout=1800)
+                await git("clone", "--mirror", "--quiet", "--", check_git_url(url) or url, tmp,
+                          timeout=1800)
                 os.replace(tmp, mirror)
                 self._fetched_at[mirror] = time.monotonic()
             elif fetch and time.monotonic() - self._fetched_at.get(mirror, 0.0) >= max_age_s:
@@ -115,9 +118,12 @@ class Workspace:
     async def resolve(self, url: str, ref: str | None) -> str:
         """Fetch, then resolve ``ref`` (branch / tag / sha; None => remote default) to a sha."""
         mirror = await self.ensure_mirror(url, fetch=True)
-        target = ref or "HEAD"
         try:
-            return await git("--git-dir", mirror, "rev-parse", "--verify", "--quiet",
+            target = check_git_ref(ref) or "HEAD"
+        except ValueError as exc:
+            raise GitError(str(exc)) from None
+        try:
+            return await git("--git-dir", mirror, "rev-parse", "--verify", "--quiet", "--end-of-options",
                              f"{target}^{{commit}}")
         except GitError:
             raise GitError(f"cannot resolve ref {target!r} in {url}") from None
@@ -129,27 +135,42 @@ class Workspace:
         except GitError:
             return False
 
+    def worktree_lock(self, mirror: str) -> asyncio.Lock:
+        """Serializes every `git worktree add/remove/prune` on one mirror (its admin dir is shared)."""
+        return self._lock("wt:" + os.path.abspath(mirror))
+
     async def checkout(self, url: str, sha: str) -> Checkout:
-        """A detached worktree at ``sha`` (created once, reused by every run of that commit)."""
+        """A detached worktree at ``sha`` (created once, reused by every run of that commit).
+
+        The checkout is returned **acquired** — it cannot be pruned until the caller
+        ``release()``s it (use ``async with workspace.use(url, sha)`` for scoped access).
+        """
         if not SHA_RE.match(sha):
             raise GitError(f"refusing to check out non-sha {sha!r} (resolve refs first)")
         mirror = await self.ensure_mirror(url, fetch=False)
         path = self.checkout_path(url, sha)
         async with self._lock("co:" + path):
-            if os.path.isfile(os.path.join(path, ".git")):
-                os.utime(path)
-                return Checkout(path=path, sha=sha)
-            if not await self._has_commit(mirror, sha):
-                await self.ensure_mirror(url, fetch=True)
+            if not os.path.isfile(os.path.join(path, ".git")):
                 if not await self._has_commit(mirror, sha):
-                    raise GitError(f"commit {sha} not found in {url}")
-            shutil.rmtree(path, ignore_errors=True)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            await git("--git-dir", mirror, "worktree", "prune", timeout=120)
-            await git("--git-dir", mirror, "worktree", "add", "--detach", "--force", path, sha,
-                      timeout=1800)
-        await self._prune(url)
+                    await self.ensure_mirror(url, fetch=True)
+                    if not await self._has_commit(mirror, sha):
+                        raise GitError(f"commit {sha} not found in {url}")
+                shutil.rmtree(path, ignore_errors=True)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                async with self.worktree_lock(mirror):
+                    await git("--git-dir", mirror, "worktree", "prune", timeout=120)
+                    await git("--git-dir", mirror, "worktree", "add", "--detach", "--force", path, sha,
+                              timeout=1800)
+            os.utime(path)
+            self.acquire(path)  # under the path lock: a concurrent prune cannot slip in between
+        try:
+            await self._prune(url)
+        except Exception:  # noqa: BLE001 — pruning is best effort; never fail the caller's checkout
+            pass
         return Checkout(path=path, sha=sha)
+
+    def use(self, url: str, sha: str) -> "_CheckoutUse":
+        return _CheckoutUse(self, url, sha)
 
     def acquire(self, path: str) -> None:
         self._in_use[path] = self._in_use.get(path, 0) + 1
@@ -172,12 +193,14 @@ class Workspace:
         entries.sort(key=lambda p: os.path.getmtime(p))
         mirror = self.mirror_path(url)
         for path in entries[: len(entries) - self.keep]:
-            if self._in_use.get(path):
-                continue
-            try:
-                await git("--git-dir", mirror, "worktree", "remove", "--force", path, timeout=120)
-            except GitError:
-                shutil.rmtree(path, ignore_errors=True)
+            async with self._lock("co:" + path):  # never races a checkout() of the same sha
+                if self._in_use.get(path) or not os.path.isdir(path):
+                    continue
+                async with self.worktree_lock(mirror):
+                    try:
+                        await git("--git-dir", mirror, "worktree", "remove", "--force", path, timeout=120)
+                    except GitError:
+                        shutil.rmtree(path, ignore_errors=True)
 
     # ------------------------------------------------------------------ local projects
 
@@ -218,3 +241,19 @@ class Workspace:
         h.update("\n".join(untracked).encode())
         digest = h.hexdigest()[:8]
         return Checkout(path=path, sha=f"{sha}-dirty-{digest}", dirty=True)
+
+
+class _CheckoutUse:
+    """``async with workspace.use(url, sha) as co:`` — checkout + guaranteed release."""
+
+    def __init__(self, ws: Workspace, url: str, sha: str) -> None:
+        self.ws, self.url, self.sha = ws, url, sha
+        self.co: Checkout | None = None
+
+    async def __aenter__(self) -> Checkout:
+        self.co = await self.ws.checkout(self.url, self.sha)
+        return self.co
+
+    async def __aexit__(self, *exc) -> None:
+        if self.co is not None:
+            self.ws.release(self.co.path)

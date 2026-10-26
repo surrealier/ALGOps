@@ -13,7 +13,6 @@ import tempfile
 import threading
 
 import httpx
-import pytest
 import uvicorn
 
 from algops.core import MasterSettings, SlaveSettings

@@ -100,20 +100,34 @@ class Dispatcher:
     # ------------------------------------------------------------------ core
 
     async def _send(self, slave_id: str, cmd: NextCommandResponse, timeout: float):
-        """Enqueue + wait in slices; returns the upload, or None if the runner died / timed out."""
+        """Enqueue + wait in slices.
+
+        Returns ``(upload, None)`` or ``(None, why)`` with ``why`` in:
+          * ``not started``  — still queued when the runner went away / the queue limit passed
+                               (safe to re-dispatch: it never ran)
+          * ``runner went offline`` — the runner stopped heart-beating mid-run
+          * ``timeout``     — it ran longer than ``timeout`` (counted from pickup, not enqueue)
+        """
         self._assigned[slave_id] = self._assigned.get(slave_id, 0) + 1
         cid = await self.bus.enqueue(slave_id, cmd)
-        deadline = time.monotonic() + timeout
+        queued_until = time.monotonic() + self.settings.queue_timeout_s
+        deadline: float | None = None
         try:
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                now = time.monotonic()
+                if deadline is None and await self.bus.picked(cid):
+                    deadline = now + timeout
+                if deadline is not None and now >= deadline:
                     return None, "timeout"
-                up = await self.bus.wait(cid, min(WAIT_SLICE_S, remaining))
+                if deadline is None and now >= queued_until:
+                    return None, "not started"
+                slice_s = WAIT_SLICE_S if deadline is None else max(0.05, min(WAIT_SLICE_S, deadline - now))
+                up = await self.bus.wait(cid, slice_s)
                 if up is not None:
                     return up, None
                 if not self._alive(slave_id):
-                    return None, "runner went offline"
+                    return None, "not started" if deadline is None and not await self.bus.picked(cid) \
+                        else "runner went offline"
         finally:
             self._assigned[slave_id] = max(0, self._assigned.get(slave_id, 1) - 1)
             await self.bus.forget(cid)
@@ -136,8 +150,10 @@ class Dispatcher:
             up, why = await self._send(slave_id, cmd, timeout)
             tried.add(slave_id)
             if up is None or up.result is None:
-                kind = "timeout" if why == "timeout" else "infra"
-                last = RunResult(run_id=req.run_id, status=RunStatus.failed, error_kind=kind,
+                if why == "timeout":  # it may still be running there: never execute a run twice
+                    return RunResult(run_id=req.run_id, status=RunStatus.failed, error_kind="timeout",
+                                     error=f"runner {slave_id[:8]}: no result {timeout:g}s after it started"), slave_id
+                last = RunResult(run_id=req.run_id, status=RunStatus.failed, error_kind="infra",
                                  error=f"runner {slave_id[:8]}: {why or 'no result'}")
                 continue
             res = up.result

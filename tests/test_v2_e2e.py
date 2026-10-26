@@ -67,27 +67,32 @@ async def test_v2_platform_end_to_end(tmp_path, py_repo):
         )))
         async with httpx.AsyncClient(base_url=base, timeout=30.0) as anon, \
                 httpx.AsyncClient(base_url=base, timeout=120.0, headers=auth) as c:
-            # ---- auth: mutations need the API token, reads do not
+            # ---- auth: with an API token every API call needs it (header, or ?token= for links)
             assert (await anon.post("/api/v1/projects", json={"name": "x", "repo_url": py_repo.url})).status_code == 401
+            assert (await anon.get("/api/v1/projects")).status_code == 401
+            assert (await anon.get("/api/v1/slaves")).status_code == 401
+            assert (await anon.get("/api/v1/projects", params={"token": "wrong"})).status_code == 401
+            assert (await anon.get("/api/v1/projects", params={"token": "s3cret"})).status_code == 200
+            assert (await anon.get("/healthz")).json()["auth"] is True
             proj = (await c.post("/api/v1/projects", json={"name": "py", "repo_url": py_repo.url})).json()
             assert proj["repo_kind"] == "git"
 
             async def runner_online():
-                rs = (await anon.get("/api/v1/slaves")).json()
+                rs = (await c.get("/api/v1/slaves")).json()
                 return rs if rs and rs[0]["online"] and rs[0]["concurrency"] == 3 else None
 
             assert await _wait(runner_online, timeout=30), "runner did not come online"
 
-            rev = (await c.post(f"/api/v1/projects/py/sync")).json()
+            rev = (await c.post("/api/v1/projects/py/sync")).json()
             assert rev["sha"] == py_repo.head()
-            p = (await anon.get("/api/v1/projects/py")).json()
+            p = (await c.get("/api/v1/projects/py")).json()
             assert p["algorithms"] == ["detector", "smoother"] and p["slave_online"]
 
             async def bench(**body) -> dict:
                 b = (await c.post("/api/v1/benchmarks", json={"name": "b", **body})).json()
 
                 async def done():
-                    x = (await anon.get(f"/api/v1/benchmarks/{b['benchmark_id']}")).json()
+                    x = (await c.get(f"/api/v1/benchmarks/{b['benchmark_id']}")).json()
                     return x if x["status"] in ("passed", "failed", "error") else None
 
                 out = await _wait(done, timeout=120)
@@ -116,7 +121,7 @@ async def test_v2_platform_end_to_end(tmp_path, py_repo):
             assert v2[("smoother", "sig-smoke")] == "passed"
             smoke = next(x for x in b2["cells"] if x["suite_id"] == "det-smoke")
             assert smoke["deltas"]["fp_rate"]["status"] == "regressed" and smoke["baseline_sha"] != bad_sha
-            history = (await anon.get("/api/v1/projects/py/history",
+            history = (await c.get("/api/v1/projects/py/history",
                                       params={"algorithm_id": "detector", "suite_id": "det-smoke"})).json()
             assert [h["commit_sha"] for h in history[:2]] == [bad_sha, b1["revisions"][proj["project_id"]]]
 
@@ -139,38 +144,41 @@ async def test_v2_platform_end_to_end(tmp_path, py_repo):
             assert started["attempt"] == 0
 
             async def exp_done():
-                e = (await anon.get(f"/api/v1/experiments/{eid}")).json()
+                e = (await c.get(f"/api/v1/experiments/{eid}")).json()
                 return e if e["status"] in TERMINAL_EXP else None
 
             e = await _wait(exp_done, timeout=180)
             assert e and e["status"] != "failed", e
             assert e["commit_sha"] == bad_sha  # pinned to the revision resolved at start
-            final = (await anon.get(f"/api/v1/experiments/{eid}/final")).json()
+            final = (await c.get(f"/api/v1/experiments/{eid}/final")).json()
             assert final["metrics"]["recall"] >= 0.7
             assert final["changed_params"], "the campaign should improve on the (regressed) defaults"
             assert final["validation"]["det-full"]["best"]["status"] == "evaluated"
-            runs = (await anon.get(f"/api/v1/experiments/{eid}/runs")).json()
+            runs = (await c.get(f"/api/v1/experiments/{eid}/runs")).json()
             assert {r["kind"] for r in runs} == {"search", "validation"}
             assert all(r["commit_sha"] == bad_sha for r in runs)
             assert any(r["log_uri"] for r in runs)  # artifacts proxied through the master
-            log = await anon.get("/api/v1/artifacts", params={"uri": runs[0]["log_uri"]})
+            log = await c.get("/api/v1/artifacts", params={"uri": runs[0]["log_uri"]})
             assert log.status_code == 200
+            assert (await anon.get("/api/v1/artifacts", params={"uri": runs[0]["log_uri"]})).status_code == 401
+            outside = await c.get("/api/v1/artifacts", params={"uri": "algops://../tracking.sqlite"})
+            assert outside.status_code == 404
 
             # ---- promotion: branch commit on the remote, patch stored, main untouched
             promo = (await c.post(f"/api/v1/experiments/{eid}/promote", json={"push": True})).json()
             assert promo["ok"] and promo["pushed"], promo
             assert git("--git-dir", py_repo.remote, "rev-parse", promo["branch"]) == promo["commit_sha"]
             assert git("--git-dir", py_repo.remote, "rev-parse", "main") == bad_sha
-            patch = await anon.get("/api/v1/artifacts", params={"uri": promo["patch_uri"]})
+            patch = await c.get("/api/v1/artifacts", params={"uri": promo["patch_uri"]})
             assert "algops/detector/params.yaml" in patch.text
-            assert (await anon.get(f"/api/v1/experiments/{eid}/final")).json()["promotion"]["branch"] == promo["branch"]
+            assert (await c.get(f"/api/v1/experiments/{eid}/final")).json()["promotion"]["branch"] == promo["branch"]
 
             # ---- re-run = a new attempt with a clean thread (no history carry-over)
             again = (await c.post(f"/api/v1/experiments/{eid}/run")).json()
             assert again["attempt"] == 1
             assert await _wait(exp_done, timeout=180)
-            runs1 = (await anon.get(f"/api/v1/experiments/{eid}/runs")).json()
-            all_runs = (await anon.get(f"/api/v1/experiments/{eid}/runs", params={"all_attempts": "true"})).json()
+            runs1 = (await c.get(f"/api/v1/experiments/{eid}/runs")).json()
+            all_runs = (await c.get(f"/api/v1/experiments/{eid}/runs", params={"all_attempts": "true"})).json()
             assert runs1 and {r["attempt"] for r in runs1} == {1}
             assert len(all_runs) == len(runs) + len(runs1)
             assert min(r["iteration_index"] for r in runs1) == 1
@@ -187,7 +195,7 @@ async def test_v2_platform_end_to_end(tmp_path, py_repo):
             assert second["changed"] and second["benchmark_id"]
 
             async def watch_done():
-                x = (await anon.get(f"/api/v1/benchmarks/{second['benchmark_id']}")).json()
+                x = (await c.get(f"/api/v1/benchmarks/{second['benchmark_id']}")).json()
                 return x if x["status"] in ("passed", "failed", "error") else None
 
             wb = await _wait(watch_done, timeout=120)

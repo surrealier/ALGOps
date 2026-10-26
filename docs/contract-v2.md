@@ -28,7 +28,7 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
 | `algorithms[].suites` | 이 알고리즘에 쓰는 스위트 id (생략 시 전체) |
 | `algorithms[].metrics` | `presets: [binary|regression|latency]`, `declare: [{name, direction, unit}]` |
 | `algorithms[].gates` | `[{metric, op, value}]` — 벤치마크의 절대 합격선 |
-| `algorithms[].regression` | `rel_tolerance`(기본 0.02), `abs_tolerance: {metric: v}`, `metrics`(비교 대상, 기본 = 목표+제약+게이트 지표) |
+| `algorithms[].regression` | `rel_tolerance`(기본 0.02), `abs_tolerance: {metric: v}`, `metrics`(비교 대상, 기본 = 목표+게이트 지표). 허용폭 = `max(abs_tolerance[m], rel_tolerance×\|기준값\|, 1e-9)` — 기준값이 0인 지표는 `abs_tolerance`로 민감도를 정하세요. 기준에 있던 지표가 사라지면 `lost` → 회귀 |
 | `algorithms[].objective` | 캠페인 기본 목표 `{metric, direction?, target?, constraints[]}` |
 | `algorithms[].runs_on` | 필요한 러너 라벨 (예: `[gpu]`) |
 | `algorithms[].timeout_s` | 런 하나의 제한 시간 (기본 900) |
