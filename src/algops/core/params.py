@@ -2,7 +2,7 @@
 
 A parameter is always a fully-specified object (never a bare scalar) so the PM can reason
 about range/step/influence and so it maps cleanly onto Neo4j ``:Parameter`` nodes later.
-Keys are dotted, globally unique, and IMMUTABLE (renaming breaks lineage + learned weights).
+Keys are dotted, unique within an algorithm, and IMMUTABLE (renaming breaks lineage + learned weights).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import Dtype, Influence
 
@@ -20,6 +20,8 @@ KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 class InfluenceTags(BaseModel):
     """A-priori belief about how a parameter moves false-positive / false-negative rates."""
 
+    model_config = ConfigDict(extra="forbid")
+
     fp: Influence = Influence.unknown
     fn: Influence = Influence.unknown
 
@@ -27,13 +29,15 @@ class InfluenceTags(BaseModel):
 class ParamDef(BaseModel):
     """One row of ``params.yaml`` — the externalized definition of a single knob."""
 
-    key: str = Field(description="dotted, globally unique, immutable")
+    model_config = ConfigDict(extra="forbid")  # a typo'd field must not be silently ignored
+
+    key: str = Field(description="dotted, unique within an algorithm, immutable")
     dtype: Dtype
     default: Any
     range: tuple[float, float] | None = None  # required for float/int
     step: float | None = None  # search granularity for the PM (required for float/int)
     enum: list[Any] | None = None  # required for enum
-    stage: str  # must match a CSV stage id (the join key)
+    stage: str = "decision"  # telemetry stage id the parameter acts in
     influence: InfluenceTags = Field(default_factory=InfluenceTags)
     unit: str | None = None
     description: str | None = None
@@ -116,6 +120,14 @@ class ParamSpec(BaseModel):
     version: int = 1
     modality: str = "tabular"
     params: list[ParamDef] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique(self) -> "ParamSpec":
+        keys = [p.key for p in self.params]
+        dups = sorted({k for k in keys if keys.count(k) > 1})
+        if dups:
+            raise ValueError(f"duplicate parameter key(s): {dups}")
+        return self
 
     def by_key(self) -> dict[str, ParamDef]:
         return {p.key: p for p in self.params}

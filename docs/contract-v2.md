@@ -21,7 +21,7 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
 | `env.setup` | 러너가 체크아웃마다 **한 번** 실행하는 셸 명령 목록 (빌드·의존성 설치). 커밋·명령이 같으면 캐시 |
 | `env.vars` | 모든 실행에 주입할 환경변수 |
 | `env.python` | `python:` 엔트리포인트를 실행할 인터프리터 (예: `.venv/bin/python`). 생략 시 러너의 파이썬 |
-| `suites[]` | `id`, `uri`, `tags`, `description`. `uri`는 저장소 상대경로, 절대경로, `${VAR}`(러너 호스트에서 확장), `scheme://`(프로그램이 해석) |
+| `suites[]` | `id`, `uri`, `tags`, `description`. `uri`는 저장소 상대경로, 절대경로, `${VAR}`·`${VAR:-기본값}`·`$VAR`·`~`(러너 호스트의 환경변수 + `env.vars`로 확장), `scheme://`(확장하지 않고 프로그램이 해석). 변수가 없거나 로컬 경로가 없으면 실행 전에 `setup` 오류 |
 | `algorithms[].id` | 소문자 slug, **불변** |
 | `algorithms[].params` | 파라미터 파일 경로 또는 인라인 목록 (§2) |
 | `algorithms[].entrypoint` | `python: "file.py:func"` / `"pkg.module:func"` 또는 `command: [...]` / `"셸 문자열"`, `cwd`, `env` |
@@ -33,7 +33,8 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
 | `algorithms[].runs_on` | 필요한 러너 라벨 (예: `[gpu]`) |
 | `algorithms[].timeout_s` | 런 하나의 제한 시간 (기본 900) |
 
-에디터 자동완성: `algops init`이 `algops/algops.schema.json`을 함께 둡니다.
+에디터 자동완성: `algops init`이 `algops/algops.schema.json`을 함께 둡니다. **모르는 키는 오류**입니다
+(`gate:`, `parms:` 같은 오타가 조용히 무시되지 않도록).
 
 ### 지표 프리셋
 
@@ -43,24 +44,31 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
 | `regression` | `mae`↓ `rmse`↓ `mse`↓ `max_abs_error`↓ |
 | `latency` | `latency_ms`↓ `latency_p95_ms`↓ `throughput`↑ |
 
-선언하지 않은 지표도 저장·표시됩니다(방향은 이름으로 추정). 목표·게이트에 쓰는 지표는 선언하세요.
+- 프리셋은 **지표의 방향만 선언**합니다. 값을 계산해 주는 것은 `binary`뿐이며(결과에 `counts`가 있을 때),
+  `regression`/`latency` 값은 프로그램이 직접 계산해 `metrics`로 보고합니다.
+- 결과에 `metrics`와 `counts`가 모두 있으면 **명시적으로 보고한 metrics 값이 우선**합니다(파생값은 빈 자리만 채움).
+- 선언하지 않은 지표도 저장·표시됩니다(방향은 이름으로 추정). **게이트·목표에 쓰는 지표는 반드시 선언**해야
+  하며, 선언되지 않았으면 `algops validate`가 오류를 냅니다(오타 방지).
+- 회귀 비교 대상(기본) = 목표 지표 + 게이트 지표. 목표의 *제약* 지표는 임계값이므로, 제약을 만족하는 범위의
+  변동은 회귀로 보지 않습니다. 다르게 하려면 `regression.metrics`를 명시하세요.
 
 ## 2. 파라미터
 
 ```yaml
-- key: detector.confidence_threshold   # 점표기, 전역 고유, 불변
+- key: detector.confidence_threshold   # 점표기, 알고리즘 안에서 고유(저장소 전체 고유 권장), 불변
   dtype: float                          # float | int | bool | enum
   default: 0.45                         # git의 이 값이 "진실"
   range: [0.05, 0.95]                   # float/int 필수
   step: 0.05                            # 탐색 단위 (float/int 필수)
   enum: [a, b]                          # dtype=enum 필수
-  stage: decision                       # 텔레메트리 stage id
+  stage: decision                       # 텔레메트리 stage id (선택, 기본 decision)
   influence: { fp: high, fn: high }     # 사전 지식 (LLM 플래너 힌트)
   drop_reasons: [below_threshold]       # 이 파라미터가 만드는 dec_reason
 ```
 
 러너는 실행 전에 **기본값 병합 → 타입 강제 → 범위 클램프 → 미선언 키 거부**를 수행합니다.
-프로그램은 항상 완전한 유효 파라미터 집합을 받으므로 별도 검증이 필요 없습니다.
+프로그램은 항상 완전한 유효 파라미터 집합을 받으므로 별도 검증이 필요 없습니다. `algops run`은 클램프·반올림된
+값을 `note:`로 알려 줍니다. 파라미터 파일은 `meta` + `params` 매핑이거나 파라미터 목록 그 자체일 수 있습니다.
 
 ## 3. 실행 프로토콜 `algops.run/v2`
 
@@ -89,7 +97,12 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
 | `ALGOPS_RUN_ID`, `ALGOPS_ALGORITHM_ID`, `ALGOPS_REPO_ROOT`, `ALGOPS_COMMIT_SHA`, `ALGOPS_SEED` | 기타 |
 
 `command`의 각 인자(또는 셸 문자열)에서 `{request} {result} {output_dir} {params} {suite_path}
-{suite_uri} {run_id} {repo_root} {param:<key>}`가 치환됩니다 (셸 문자열은 자동 quoting).
+{suite_uri} {run_id} {repo_root} {param:<key>}`가 치환됩니다 (셸 문자열은 자동 quoting). 그 외의 `{name}`은
+그대로 전달되고(`validate`가 경고), 선언되지 않은 `{param:<key>}`는 `validate` 오류입니다.
+
+값의 문자열 표현(환경변수·치환자): bool → `true`/`false`, int 파라미터 → 항상 정수(실수로 주면 반올림),
+float → 파이썬 기본 표현(`0.45`, `1e-07`), enum → 선언된 값 그대로. 구조화된 값이 필요하면
+`$ALGOPS_PARAMS_FILE`(JSON, 타입 보존)을 읽으세요.
 
 ### 결과 (`$ALGOPS_RESULT`)
 ```json
@@ -100,7 +113,10 @@ algops.yaml ── sync ────────▶ 커밋 고정 · 매니페�
  "telemetry": "manifest.json",
  "extra": {}}
 ```
-파일 대신 stdout 마지막 줄 `::algops-result::{json}`도 허용됩니다.
+파일 대신 stdout 마지막 줄 `::algops-result::{json}`도 허용됩니다. 규칙:
+- `status`는 `ok` 또는 `failed`(그 외 값은 `protocol` 오류). `failed`면 `error` 문자열을 함께 쓰세요.
+- `metrics` 값은 유한한 숫자여야 합니다. 문자열·bool·NaN·inf는 버려지고 `extra.dropped_metrics`에 기록됩니다.
+- `telemetry`는 `ALGOPS_OUTPUT_DIR` 기준 상대 경로입니다.
 
 ### 실패 분류 (`error_kind`)
 | 값 | 의미 | 재시도 |
@@ -133,7 +149,9 @@ v1 어댑터 `run(req: RunRequest, output_dir) -> RunResult`도 그대로 동작
 ALGOps 설치 필요).
 
 ## 5. 텔레메트리 규약
-- 단계마다 CSV 1개 + `manifest.json` (`stages: [{stage, csv, grain, depends_on}]`).
+- 단계마다 CSV 1개 + `manifest.json` (`stages: [{stage, csv, grain, depends_on}]`) — 모두 `ALGOPS_OUTPUT_DIR` 안에.
+  `grain`은 행 단위를 나타내는 자유 라벨(`entity`·`item`·`frame`), `depends_on`은 선행 stage id 목록입니다.
+- `dec_kept`·`gt_match`는 0/1(또는 true/false), `dec_reason`은 문자열(예: `kept`, `below_threshold`).
 - 공통 선행 컬럼 `run_id,item_id,frame_index,entity_id,stage`; `entity_id`가 단계 간 조인 키.
 - 컬럼 프리픽스 `in_` `ai_` `feat_` `dfeat_` `dec_` `gt_`.
 - `decision` 단계의 `dec_kept`+`gt_match`로 마스터가 혼동행렬을 **독립 재계산**하고, `dec_reason`을
@@ -143,14 +161,21 @@ ALGOps 설치 필요).
 
 | 명령 | 용도 |
 | --- | --- |
-| `algops init [path] -a ID --lang python|command` | 스캐폴드 (매니페스트, 파라미터, 엔트리포인트, 샘플 스위트, AGENTS.md) |
-| `algops validate [path]` | 정적 검사 |
-| `algops verify [path]` | validate + 모든 알고리즘 기본값 1회 실행 — 외부화 완료 게이트 |
-| `algops run [path] -a ID -s SUITE --set k=v` | 셀 하나 실행 (`--log`, `--json`) |
-| `algops test [path] [-a] [-s] [-t TAG] [--baseline r.json] [--json out.json] [-j N]` | 전체 셀 + 게이트 + 베이스라인 회귀. 실패 시 exit 1 |
+| `algops init [path] -a ID --lang python|command` | 스캐폴드 (매니페스트, 파라미터, 엔트리포인트, 샘플 스위트, AGENTS.md). 기존 저장소에서는 추가할 알고리즘 블록을 출력 |
+| `algops introspect [path]` | 하드코딩된 숫자 후보 스캔 (Python AST + C/C++/CUDA/JS/TS/Go/Rust/Java/C#/MATLAB/셸 정규식). 기존 `UNDERSTANDING.md`는 보존 |
+| `algops validate [path]` | 정적 검사 (스키마, 파라미터, 엔트리포인트 존재·실행권한, 치환자, 게이트·목표 지표 선언, 스위트 경로) |
+| `algops verify [path] [--all-suites]` | validate + 모든 알고리즘을 기본값으로 **첫 스위트**에서 1회 실행 (`--all-suites`: 전부) — 외부화 완료 게이트 |
+| `algops run [path] -a ID -s SUITE --set k=v [--timeout S] [--log] [--json]` | 셀 하나 실행 |
+| `algops test [path] [-a] [-s] [-t TAG] [--set k=v] [--baseline r.json] [--json out.json] [--tolerance R] [--timeout S] [--log] [-j N] [-q]` | 전체 셀 + 게이트 + 베이스라인 회귀. 실패 시 exit 1, 사용법 오류 exit 2 |
 | `algops ci --master URL -p NAME --ref SHA` | 마스터 벤치마크를 걸고 판정으로 exit (CI 게이트) |
 | `algops master` / `algops slave` | 서버 / 러너 실행 |
 
-## 7. 예제
+## 7. 로컬 프로젝트와 빌드 산출물
+로컬 경로 프로젝트(`algops test`, `ALGOPS_SLAVE_LOCAL_PROJECTS`)에서는 `env.setup`이 **작업 트리 안에서**
+실행됩니다. 빌드 산출물은 `.gitignore`에 넣으세요. 로컬 리비전은 `HEAD` + 추적 파일 diff + 무시되지 않은
+새 파일로 지문을 만들기 때문에(`build/`, `dist/`, `target/`, `node_modules/`, `__pycache__/` 등은 제외), 소스를
+고치거나 새 파일을 추가하면 setup이 다시 실행됩니다. git 프로젝트는 러너가 커밋별 worktree를 따로 만듭니다.
+
+## 8. 예제
 - [`examples/py-multi-algo`](../examples/py-multi-algo) — 알고리즘 2개(이진 분류 후처리 + 회귀 스무더), 스위트 4개, 인라인/파일 파라미터
 - [`examples/c-threshold`](../examples/c-threshold) — C 프로그램, `env.setup`에서 컴파일, 환경변수로 파라미터

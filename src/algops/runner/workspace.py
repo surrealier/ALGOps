@@ -200,7 +200,21 @@ class Workspace:
         except GitError:  # a repository without commits yet
             return Checkout(path=path, sha="local-" + _fingerprint(path), dirty=True)
         diff = await git("-C", path, "diff", "HEAD", "--binary", timeout=120)
-        if not diff.strip():
+        # Untracked (not ignored) files count too — a new source file must invalidate caches.
+        # Build outputs belong in .gitignore; well-known output dirs are skipped regardless.
+        others = await git("-C", path, "ls-files", "--others", "--exclude-standard", timeout=120)
+        untracked = []
+        for rel in sorted(x for x in others.splitlines() if x.strip()):
+            if any(part in _FP_SKIP for part in rel.split("/")[:-1]):
+                continue
+            try:
+                st = os.stat(os.path.join(path, rel))
+            except OSError:
+                continue
+            untracked.append(f"{rel}|{st.st_size}|{st.st_mtime_ns}")
+        if not diff.strip() and not untracked:
             return Checkout(path=path, sha=sha)
-        digest = hashlib.sha1(diff.encode("utf-8", "replace")).hexdigest()[:8]
+        h = hashlib.sha1(diff.encode("utf-8", "replace"))
+        h.update("\n".join(untracked).encode())
+        digest = h.hexdigest()[:8]
         return Checkout(path=path, sha=f"{sha}-dirty-{digest}", dirty=True)

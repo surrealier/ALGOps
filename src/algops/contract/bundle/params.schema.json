@@ -3,7 +3,6 @@
   "title": "ALGOps params.yaml (contract v2)",
   "type": "object",
   "required": [
-    "meta",
     "params"
   ],
   "properties": {
@@ -40,14 +39,13 @@
         "required": [
           "key",
           "dtype",
-          "default",
-          "stage"
+          "default"
         ],
         "properties": {
           "key": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
-            "description": "dotted, globally unique, IMMUTABLE"
+            "description": "dotted, unique within the algorithm, IMMUTABLE"
           },
           "dtype": {
             "enum": [
@@ -77,7 +75,7 @@
           },
           "stage": {
             "type": "string",
-            "description": "must match a CSV stage id"
+            "description": "telemetry stage id the parameter acts in (default: decision)"
           },
           "influence": {
             "type": "object",
@@ -149,8 +147,10 @@
               ]
             }
           }
-        ]
+        ],
+        "additionalProperties": false
       }
     }
-  }
+  },
+  "additionalProperties": false
 }

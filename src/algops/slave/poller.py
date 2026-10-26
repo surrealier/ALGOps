@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import socket
 
 import httpx
@@ -148,7 +149,11 @@ class Runner:
                 where = f"{req.repo.name if req.repo else '?'}:{req.algorithm_id}@{req.suite_id}"
                 print(f"[runner] run {req.run_id[:8]} {where} params={req.param_values}", flush=True)
                 outcome = await self.engine.run(req)
-                result = await self._upload_outcome(outcome)
+                try:
+                    result = await self._upload_outcome(outcome)
+                finally:
+                    if outcome.run_dir:  # artifacts now live on the master; keep the runner disk bounded
+                        shutil.rmtree(outcome.run_dir, ignore_errors=True)
                 print(f"[runner]   → {result.status.value} ({result.duration_s or 0:.2f}s)"
                       + (f" [{result.error_kind}] {str(result.error)[:200]}" if result.error else ""), flush=True)
                 return CommandResultUpload(command_id=cid, result=result)

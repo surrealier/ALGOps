@@ -30,7 +30,7 @@ import re
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .enums import GoalDirection
 from .metrics import Constraint, MetricSpec, Objective, preset_specs, resolve_direction
@@ -41,13 +41,42 @@ CONTRACT_VERSION = 2
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
+class _Strict(BaseModel):
+    """Manifest models reject unknown keys — a typo (``gate:``, ``parms:``) must never be ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def format_validation_error(exc: ValidationError) -> str:
+    """Short, human-readable pydantic errors (no union-branch noise, no doc links)."""
+    lines: list[str] = []
+    errs = exc.errors(include_url=False)
+    deep = {tuple(map(str, e["loc"]))[:-1] for e in errs if len(e["loc"]) > 1}
+    for e in errs:
+        loc = [str(x) for x in e["loc"]]
+        # A `str | list` field reports one error per union branch; keep the informative one.
+        if loc and loc[-1] == "str" and e.get("type") == "string_type" and any(
+                d[: len(loc) - 1] == tuple(loc[:-1]) and len(d) >= len(loc) for d in deep):
+            continue
+        path = ".".join(x for x in loc if not x.startswith(("list[", "function-")) and x not in ("str", "list"))
+        msg = str(e.get("msg", "invalid")).removeprefix("Value error, ")
+        if e.get("type") == "extra_forbidden":
+            msg = "unknown key (typo?)"
+        lines.append(f"{path or '<root>'}: {msg}")
+    seen: list[str] = []
+    for line in lines:
+        if line not in seen:
+            seen.append(line)
+    return "; ".join(seen)
+
+
 def _check_id(v: str, what: str) -> str:
     if not ID_PATTERN.match(v):
         raise ValueError(f"invalid {what} id {v!r}: must match {ID_PATTERN.pattern}")
     return v
 
 
-class EnvSpec(BaseModel):
+class EnvSpec(_Strict):
     """How the runner prepares a checkout before its first run (cached per commit+setup)."""
 
     setup: list[str] = Field(default_factory=list)  # shell commands, run in the repo root
@@ -56,7 +85,7 @@ class EnvSpec(BaseModel):
     setup_timeout_s: float = 1800.0
 
 
-class EntrypointSpec(BaseModel):
+class EntrypointSpec(_Strict):
     """Exactly one of ``command`` (any language) or ``python`` (SDK shim) must be given.
 
     ``command`` may be an argv list or a shell string; both support placeholders:
@@ -78,7 +107,7 @@ class EntrypointSpec(BaseModel):
         return self
 
 
-class SuiteSpec(BaseModel):
+class SuiteSpec(_Strict):
     id: str
     uri: str = ""  # repo-relative path, absolute path, "${VAR}/x", or scheme://...
     description: str | None = None
@@ -90,7 +119,7 @@ class SuiteSpec(BaseModel):
         return _check_id(v, "suite")
 
 
-class MetricsDecl(BaseModel):
+class MetricsDecl(_Strict):
     presets: list[str] = Field(default_factory=list)
     declare: list[MetricSpec] = Field(default_factory=list)
 
@@ -117,11 +146,13 @@ class MetricsDecl(BaseModel):
         return out
 
 
-class RegressionPolicy(BaseModel):
+class RegressionPolicy(_Strict):
     """How a benchmark cell is compared against its baseline.
 
     A metric regresses when it moves in the *worse* direction by more than
-    ``max(abs_tolerance[metric], rel_tolerance * |baseline|)``.
+    ``max(abs_tolerance[metric], rel_tolerance * |baseline|)``. By default the objective metric
+    and the gate metrics are tracked; objective *constraints* are thresholds (like gates), so a
+    constrained metric drifting while still satisfying its constraint is not a regression.
     """
 
     metrics: list[str] | None = None  # None => objective metric + gate metrics
@@ -129,7 +160,7 @@ class RegressionPolicy(BaseModel):
     abs_tolerance: dict[str, float] = Field(default_factory=dict)
 
 
-class ObjectiveDecl(BaseModel):
+class ObjectiveDecl(_Strict):
     metric: str
     direction: GoalDirection | None = None  # resolved from declared metrics when omitted
     target: float | None = None
@@ -144,7 +175,7 @@ class ObjectiveDecl(BaseModel):
         )
 
 
-class AlgorithmSpec(BaseModel):
+class AlgorithmSpec(_Strict):
     id: str
     name: str | None = None
     description: str | None = None
@@ -194,7 +225,6 @@ class AlgorithmSpec(BaseModel):
         obj = self.default_objective()
         if obj is not None:
             names.append(obj.metric)
-            names += [c.metric for c in obj.constraints]
         names += [g.metric for g in self.gates]
         seen: list[str] = []
         for n in names:
@@ -203,7 +233,7 @@ class AlgorithmSpec(BaseModel):
         return seen
 
 
-class RepoManifest(BaseModel):
+class RepoManifest(_Strict):
     algops: int = CONTRACT_VERSION
     name: str | None = None
     env: EnvSpec = Field(default_factory=EnvSpec)
@@ -282,6 +312,11 @@ def load_params_file(path: str, modality: str = "tabular") -> ParamSpec:
     raw = _read_yaml(path)
     if isinstance(raw, list):  # bare list of params
         return ParamSpec(modality=modality, params=raw)
+    if not isinstance(raw, dict):
+        raise ValueError("params file must be a mapping (meta + params) or a list of params")
+    unknown = sorted(set(raw) - {"meta", "params"})
+    if unknown:
+        raise ValueError(f"unknown top-level key(s) {unknown} (expected 'meta' and 'params')")
     meta = raw.get("meta", {}) or {}
     return ParamSpec(
         version=int(meta.get("param_spec_version", 1)),
@@ -326,6 +361,8 @@ def parse_manifest(raw: dict, repo_root: str | None = None) -> RepoManifest:
     """Validate a raw manifest dict and resolve every algorithm's parameter spec."""
     try:
         manifest = RepoManifest.model_validate(raw)
+    except ValidationError as exc:
+        raise ManifestError(f"invalid algops manifest: {format_validation_error(exc)}") from exc
     except Exception as exc:  # noqa: BLE001
         raise ManifestError(f"invalid algops manifest: {exc}") from exc
     for algo in manifest.algorithms:
@@ -334,7 +371,10 @@ def parse_manifest(raw: dict, repo_root: str | None = None) -> RepoManifest:
         if algo.params is None:
             algo.param_spec = ParamSpec(modality=algo.modality, params=[])
         elif isinstance(algo.params, list):
-            algo.param_spec = ParamSpec(modality=algo.modality, params=algo.params)
+            try:
+                algo.param_spec = ParamSpec(modality=algo.modality, params=algo.params)
+            except ValidationError as exc:
+                raise ManifestError(f"{algo.id}: invalid params: {format_validation_error(exc)}") from exc
         else:
             if repo_root is None:
                 if algo.param_spec is None:
@@ -345,6 +385,8 @@ def parse_manifest(raw: dict, repo_root: str | None = None) -> RepoManifest:
                 raise ManifestError(f"{algo.id}: params file not found: {algo.params}")
             try:
                 algo.param_spec = load_params_file(path, algo.modality)
+            except ValidationError as exc:
+                raise ManifestError(f"{algo.id}: invalid params file {algo.params}: {format_validation_error(exc)}") from exc
             except Exception as exc:  # noqa: BLE001
                 raise ManifestError(f"{algo.id}: invalid params file {algo.params}: {exc}") from exc
     return manifest

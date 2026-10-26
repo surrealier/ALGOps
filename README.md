@@ -110,7 +110,7 @@ algorithms:
 The program reads its parameters from `ALGOPS_PARAM_<KEY>`, `$ALGOPS_PARAMS_FILE` or
 `$ALGOPS_REQUEST`, the suite from `ALGOPS_SUITE_PATH`, and writes
 `{"status":"ok","metrics":{…},"counts":{"tp":…}}` to `$ALGOPS_RESULT`.
-Full reference: **[docs/contract-v2.md](docs/contract-v2.md)**.
+Full reference (Korean): **[docs/contract-v2.md](docs/contract-v2.md)**.
 
 ## 🧪 Benchmarks & regressions
 
@@ -205,6 +205,8 @@ Details (runner settings, datasets, private repos, PR providers, migrations):
 **[docs/deployment.md](docs/deployment.md)**.
 
 ## 📚 Docs
+
+Detailed docs are in Korean (the team's working language):
 
 - [docs/contract-v2.md](docs/contract-v2.md) — `algops.yaml`, the run protocol, the SDK, telemetry, CLI
 - [docs/architecture.md](docs/architecture.md) — principles, dispatch, benchmarks, the campaign loop, promotion

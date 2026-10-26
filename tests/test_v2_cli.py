@@ -79,3 +79,15 @@ def test_ci_command_against_a_mock_master(capsys):
     assert rc == 1 and "regressed fp_rate: 0.3 → 0.4" in out
     assert run_ci(master_url="http://m", token=None, project=None, ref="x", algorithms=None, suites=None,
                   tags=None) == 2  # --ref without --project
+
+
+def test_test_rejects_unknown_set_keys_and_lists_ids(tmp_path, capsys):
+    root = os.path.join(EXAMPLES, "py-multi-algo")
+    work = ["--work-dir", str(tmp_path / "w")]
+    assert main(["test", root, "--set", "detector.treshold=0.6", "-q", *work]) == 2
+    assert "unknown parameter" in capsys.readouterr().err
+    assert main(["test", root, "-s", "nope", "-q", *work]) == 1
+    assert "suites: det-smoke" in capsys.readouterr().out
+    assert main(["run", root, "-a", "detector", "-s", "det-smoke", "--set", "detector.score_threshold=5", *work]) == 0
+    assert "clamped" in capsys.readouterr().out
+    assert main(["test", root, "--set", "oops"]) == 2

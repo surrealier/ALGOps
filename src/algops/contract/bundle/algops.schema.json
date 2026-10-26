@@ -1,6 +1,7 @@
 {
   "$defs": {
     "AlgorithmSpec": {
+      "additionalProperties": false,
       "properties": {
         "id": {
           "title": "Id",
@@ -116,6 +117,7 @@
       "type": "object"
     },
     "Constraint": {
+      "additionalProperties": false,
       "description": "``metric op value`` — e.g. ``recall >= 0.9``. Also used for absolute benchmark gates.",
       "properties": {
         "metric": {
@@ -157,6 +159,7 @@
       "type": "string"
     },
     "EntrypointSpec": {
+      "additionalProperties": false,
       "description": "Exactly one of ``command`` (any language) or ``python`` (SDK shim) must be given.\n\n``command`` may be an argv list or a shell string; both support placeholders:\n``{request} {result} {output_dir} {params} {suite_path} {suite_uri} {run_id} {repo_root}``\nand ``{param:<key>}``.",
       "properties": {
         "command": {
@@ -206,6 +209,7 @@
       "type": "object"
     },
     "EnvSpec": {
+      "additionalProperties": false,
       "description": "How the runner prepares a checkout before its first run (cached per commit+setup).",
       "properties": {
         "setup": {
@@ -263,6 +267,7 @@
       "type": "string"
     },
     "InfluenceTags": {
+      "additionalProperties": false,
       "description": "A-priori belief about how a parameter moves false-positive / false-negative rates.",
       "properties": {
         "fp": {
@@ -278,6 +283,7 @@
       "type": "object"
     },
     "MetricSpec": {
+      "additionalProperties": false,
       "description": "A metric an algorithm declares: its name, which way is better, and presentation hints.",
       "properties": {
         "name": {
@@ -320,6 +326,7 @@
       "type": "object"
     },
     "MetricsDecl": {
+      "additionalProperties": false,
       "properties": {
         "presets": {
           "items": {
@@ -340,6 +347,7 @@
       "type": "object"
     },
     "ObjectiveDecl": {
+      "additionalProperties": false,
       "properties": {
         "metric": {
           "title": "Metric",
@@ -383,10 +391,11 @@
       "type": "object"
     },
     "ParamDef": {
+      "additionalProperties": false,
       "description": "One row of ``params.yaml`` — the externalized definition of a single knob.",
       "properties": {
         "key": {
-          "description": "dotted, globally unique, immutable",
+          "description": "dotted, unique within an algorithm, immutable",
           "title": "Key",
           "type": "string"
         },
@@ -444,6 +453,7 @@
           "title": "Enum"
         },
         "stage": {
+          "default": "decision",
           "title": "Stage",
           "type": "string"
         },
@@ -485,8 +495,7 @@
       "required": [
         "key",
         "dtype",
-        "default",
-        "stage"
+        "default"
       ],
       "title": "ParamDef",
       "type": "object"
@@ -516,7 +525,8 @@
       "type": "object"
     },
     "RegressionPolicy": {
-      "description": "How a benchmark cell is compared against its baseline.\n\nA metric regresses when it moves in the *worse* direction by more than\n``max(abs_tolerance[metric], rel_tolerance * |baseline|)``.",
+      "additionalProperties": false,
+      "description": "How a benchmark cell is compared against its baseline.\n\nA metric regresses when it moves in the *worse* direction by more than\n``max(abs_tolerance[metric], rel_tolerance * |baseline|)``. By default the objective metric\nand the gate metrics are tracked; objective *constraints* are thresholds (like gates), so a\nconstrained metric drifting while still satisfying its constraint is not a regression.",
       "properties": {
         "metrics": {
           "anyOf": [
@@ -550,6 +560,7 @@
       "type": "object"
     },
     "SuiteSpec": {
+      "additionalProperties": false,
       "properties": {
         "id": {
           "title": "Id",
@@ -587,6 +598,7 @@
       "type": "object"
     }
   },
+  "additionalProperties": false,
   "properties": {
     "algops": {
       "default": 2,

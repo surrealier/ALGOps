@@ -16,7 +16,7 @@ import math
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import GoalDirection
 
@@ -27,6 +27,8 @@ Op = Literal[">=", "<=", ">", "<", "=="]
 
 class MetricSpec(BaseModel):
     """A metric an algorithm declares: its name, which way is better, and presentation hints."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     direction: GoalDirection
@@ -191,6 +193,8 @@ def _compare(value: float, op: Op, ref: float) -> bool:
 
 class Constraint(BaseModel):
     """``metric op value`` — e.g. ``recall >= 0.9``. Also used for absolute benchmark gates."""
+
+    model_config = ConfigDict(extra="forbid")
 
     metric: str
     op: Op = ">="

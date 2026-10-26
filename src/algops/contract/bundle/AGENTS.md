@@ -42,6 +42,9 @@ algorithms:
   fp_rate, fn_rate), `regression`(mae, rmse, mse, max_abs_error), `latency`. 그 외는 `declare`에
   이름과 방향(minimize/maximize)으로 추가합니다.
 - **게이트**는 "이 값 아래로 떨어지면 실패"인 절대 기준, **목표(objective)**는 최적화 캠페인의 기본 목표입니다.
+  게이트·목표에 쓰는 지표는 반드시 `metrics`에 선언합니다. 매니페스트의 모르는 키는 오류입니다.
+- 스위트 `uri`의 `${VAR}`(또는 `${VAR:-기본값}`)는 러너 호스트 환경변수로 확장됩니다. 데이터셋 경로를 하드코딩하지 마세요.
+- 빌드가 필요하면 `env.setup`에 넣고 산출물 디렉터리(`build/` 등)는 `.gitignore`에 추가합니다.
 - 한 저장소에 알고리즘이 여러 개면 모두 `algorithms`에 나열합니다. 테스트셋이 여러 개면 모두 `suites`에.
 
 ## 2. 파라미터 외부화
@@ -49,12 +52,12 @@ algorithms:
 
 ```yaml
 params:
-  - key: detector.confidence_threshold   # 점표기, 전역 고유, 불변 (rename 금지 — 추가/폐기만)
+  - key: detector.confidence_threshold   # 점표기, 알고리즘 안에서 고유, 불변 (rename 금지 — 추가/폐기만)
     dtype: float                          # float | int | bool | enum
     default: 0.45                         # 지금 코드에 있는 값 그대로
     range: [0.05, 0.95]                   # float/int 필수
     step: 0.05                            # 탐색 단위 (float/int 필수)
-    stage: decision                       # 텔레메트리 stage id
+    stage: decision                       # 텔레메트리 stage id (선택, 기본 decision)
     influence: { fp: high, fn: high }     # 오탐/미탐 영향 (사전 지식)
     drop_reasons: [below_threshold]       # 이 파라미터가 만드는 dec_reason 값들 (선택)
 ```
@@ -88,7 +91,9 @@ def run(ctx: sdk.Context):
 {"status": "ok", "metrics": {"latency_ms": 3.2}, "counts": {"tp": 90, "fp": 4, "fn": 10, "tn": 96}, "n_items": 200}
 ```
 파일 쓰기가 어려우면 stdout 마지막 줄에 `::algops-result::{...json...}` 을 출력해도 됩니다.
-실패는 `{"status": "failed", "error": "..."}` 또는 0이 아닌 종료 코드입니다.
+실패는 `{"status": "failed", "error": "..."}` 또는 0이 아닌 종료 코드입니다. `metrics` 값은 숫자만 허용되고,
+`counts`와 함께 보내면 명시한 metrics 값이 파생값보다 우선합니다. 실행 파일 엔트리포인트는 실행 권한(`chmod +x`)이
+있어야 하며, 스크립트라면 `["sh", "run.sh"]`처럼 인터프리터로 실행해도 됩니다.
 
 입력 환경변수: `ALGOPS_REQUEST`, `ALGOPS_RESULT`, `ALGOPS_OUTPUT_DIR`(산출물/CSV 저장 위치),
 `ALGOPS_PARAMS_FILE`, `ALGOPS_PARAM_*`, `ALGOPS_SUITE_PATH`, `ALGOPS_SUITE_URI`, `ALGOPS_SUITE_ID`,
@@ -110,7 +115,7 @@ algops verify .          # validate + 모든 알고리즘을 기본값으로 1�
 algops run . -a detector -s smoke --set detector.confidence_threshold=0.6   # 셀 하나
 algops test .            # 모든 알고리즘 × 스위트 + 게이트. --json 으로 리포트, --baseline 으로 회귀 비교
 ```
-**`algops verify .`가 exit 0이 될 때까지 완료를 선언하지 마세요.** 기본값 실행 결과가 외부화 이전
+**`algops verify . --all-suites`가 exit 0이 될 때까지 완료를 선언하지 마세요.** 기본값 실행 결과가 외부화 이전
 코드의 결과와 같아야 합니다(동작 보존). 가능하면 외부화 전후의 `algops test --json` 결과를 비교하세요.
 
 ## 제약

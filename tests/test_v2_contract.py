@@ -133,3 +133,30 @@ def test_shipped_manifest_schema_is_current():
 
     with open(os.path.join(BUNDLE, "algops.schema.json"), encoding="utf-8") as fh:
         assert fh.read() == render(), "run: python -m algops.contract.schema"
+
+
+def test_strict_manifest_rejects_typos_and_validate_checks_metrics(tmp_path):
+    from algops.contract.validate import validate_repo
+
+    with pytest.raises(ManifestError, match="gate: unknown key"):
+        parse_manifest({"algorithms": [_algo(gate=[{"metric": "recall", "op": ">=", "value": 0.9}])]})
+    with pytest.raises(ManifestError, match="enviroment: unknown key"):
+        parse_manifest({"enviroment": {}, "algorithms": [_algo()]})
+    with pytest.raises(ManifestError, match="duplicate parameter"):
+        parse_manifest({"algorithms": [_algo(params=[{"key": "a.b", "dtype": "bool", "default": True},
+                                                     {"key": "a.b", "dtype": "bool", "default": False}])]})
+    m = parse_manifest({"algorithms": [_algo(params=[{"key": "a.b", "dtype": "bool", "default": True}])]})
+    assert m.algorithm("a").spec().params[0].stage == "decision"  # stage defaults
+    (tmp_path / "p.yaml").write_text("parameters: []\n", encoding="utf-8")
+    (tmp_path / "algops.yaml").write_text(
+        "algops: 2\nalgorithms:\n  - id: a\n    params: p.yaml\n    entrypoint: {command: [echo]}\n",
+        encoding="utf-8")
+    rep = validate_repo(str(tmp_path))
+    assert not rep.ok and "unknown top-level key" in rep.findings[0].message
+    (tmp_path / "algops.yaml").write_text(
+        "algops: 2\nalgorithms:\n  - id: a\n    entrypoint: {command: [\"echo\", \"{param:a.zz}\"]}\n"
+        "    metrics: {presets: [binary]}\n    gates: [{metric: recal, op: \">=\", value: 0.5}]\n"
+        "    objective: {metric: fp_rte}\n", encoding="utf-8")
+    msgs = [f.message for f in validate_repo(str(tmp_path)).findings if f.level == "error"]
+    assert any("'recal'" in x for x in msgs) and any("'fp_rte'" in x for x in msgs)
+    assert any("{param:a.zz}" in x for x in msgs)

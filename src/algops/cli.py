@@ -35,7 +35,7 @@ def _parse_sets(items: list[str] | None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for item in items or []:
         if "=" not in item:
-            raise SystemExit(f"--set expects key=value, got {item!r}")
+            raise ValueError(f"--set expects key=value, got {item!r}")
         key, raw = item.split("=", 1)
         try:
             value: Any = json.loads(raw)
@@ -61,12 +61,25 @@ _VERDICT_ICON = {"passed": "✅", "improved": "⬆️ ", "regressed": "⚠️ ",
 def cmd_init(a: argparse.Namespace) -> int:
     from algops.contract.scaffold import init_repo
 
+    from algops.contract.scaffold import algorithm_snippet
+    from algops.core.manifest import find_manifest
+
+    existing = find_manifest(a.path)
+    declared = False
+    if existing is not None:
+        with open(existing, encoding="utf-8") as fh:
+            declared = f"id: {a.algorithm}" in fh.read()
     written, skipped = init_repo(a.path, algorithm=a.algorithm, lang=a.lang, name=a.name, force=a.force)
     for p in written:
         print("  +", os.path.relpath(p, a.path))
     for p in skipped:
         print("  =", os.path.relpath(p, a.path), "(exists, kept — use --force to overwrite)")
-    print("\n다음: `algops validate` → `algops run -a %s -s smoke` → `algops test`" % a.algorithm)
+    if existing is not None and not a.force and not declared:
+        print(f"\n{os.path.basename(existing)} already exists — add this algorithm under `algorithms:`:\n")
+        print(algorithm_snippet(a.algorithm, a.lang))
+        print("then: `algops validate` → `algops run -a %s` → `algops test`" % a.algorithm)
+        return 0
+    print("\nnext: `algops validate` → `algops run -a %s -s smoke` → `algops test`" % a.algorithm)
     return 0
 
 
@@ -91,7 +104,8 @@ def cmd_verify(a: argparse.Namespace) -> int:
         return 0 if res.ok else 1
     from algops.contract.validate import verify_repo
 
-    rep = asyncio.run(verify_repo(a.path, work_dir=a.work_dir, algorithms=a.algorithm or None))
+    rep = asyncio.run(verify_repo(a.path, work_dir=a.work_dir, algorithms=a.algorithm or None,
+                                  all_suites=a.all_suites))
     print(rep.render())
     return 0 if rep.ok else 1
 
@@ -112,12 +126,20 @@ def cmd_run(a: argparse.Namespace) -> int:
                      timeout_s=a.timeout)
     out = asyncio.run(engine.run(req))
     res = out.result
+    notes = []
+    for k, v in req.param_values.items():
+        got = (res.param_values or {}).get(k)
+        if res.param_values and got != v and not (isinstance(v, (int, float)) and not isinstance(v, bool)
+                                                 and isinstance(got, (int, float)) and float(v) == float(got)):
+            notes.append(f"{k}: {v!r} → {got!r} (clamped/coerced to the declared range/type)")
     if a.json:
         print(res.model_dump_json(indent=2))
     else:
         print(f"{algo_id}@{suite_id}  status={res.status.value}  ({res.duration_s or 0:.2f}s, sha={res.commit_sha})")
         if res.param_values:
             print("params :", ", ".join(f"{k}={v}" for k, v in res.param_values.items()))
+        for n in notes:
+            print("note   :", n)
         if res.metrics:
             print("metrics:", _fmt_metrics(res.metrics, n=12))
         if res.error:
@@ -139,11 +161,19 @@ def cmd_test(a: argparse.Namespace) -> int:
             return
         icon = _VERDICT_ICON.get(c["verdict"], "?")
         line = f"{icon} {c['verdict']:<11} {c['algorithm_id']}@{c['suite_id']:<14} {_fmt_metrics(c['metrics'])}"
+        if baseline is not None and c["status"] == "evaluated" and not c.get("has_baseline"):
+            line += "  (no baseline cell)"
         if c.get("error"):
-            line += f"  [{c.get('error_kind')}] {c['error'].splitlines()[0][:160]}"
+            line += f"  [{c.get('error_kind')}] {c['error'].splitlines()[0][:200]}"
+            rest = c["error"].splitlines()[1:]
+            if rest and a.log:
+                line += "\n      " + "\n      ".join(rest[-25:])
+        if a.log and c.get("log_tail"):
+            line += "\n      --- program output (tail) ---\n      " + c["log_tail"].replace("\n", "\n      ")
         for g in c.get("gates", []):
             if not g["passed"]:
-                line += f"\n      gate {g['metric']} {g['op']} {g['value']} (actual {g['actual']})"
+                actual = "not reported" if g["actual"] is None else g["actual"]
+                line += f"\n      gate {g['metric']} {g['op']} {g['value']} (actual {actual})"
         for m, d in (c.get("deltas") or {}).items():
             if d["status"] == "regressed":
                 line += f"\n      regressed {m}: {d['baseline']:.4g} → {d['current']:.4g} (tol {d['tolerance']:.3g})"
@@ -152,16 +182,25 @@ def cmd_test(a: argparse.Namespace) -> int:
     doc = asyncio.run(run_local_tests(
         a.path, algorithms=a.algorithm or None, suites=a.suite or None, tags=a.tag or None,
         overrides=_parse_sets(a.set), baseline=baseline, jobs=a.jobs, work_dir=a.work_dir,
-        rel_tolerance=a.tolerance, on_cell=on_cell,
+        rel_tolerance=a.tolerance, on_cell=on_cell, timeout_s=a.timeout,
     ))
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, ensure_ascii=False, indent=2)
     s = doc["summary"]
-    print(f"\n{doc['project']} @ {doc['commit_sha'][:12]} — {len(doc['cells'])} cell(s): "
+    sha = doc["commit_sha"]
+    shown = sha if (sha.startswith("local") or "-dirty" in sha) else sha[:12]
+    print(f"\n{doc['project']} @ {shown} — {len(doc['cells'])} cell(s): "
           + ", ".join(f"{k}={v}" for k, v in s.items() if v) + f"  ({doc['duration_s']:.1f}s)")
+    if "-dirty" in sha or sha.startswith("local"):
+        print("note: uncommitted changes are included in this run")
     if not doc["cells"]:
-        print("no cells matched the filters")
+        from algops.core import load_manifest
+
+        m = load_manifest(a.path)
+        tags = sorted({t for su in m.suites for t in su.tags})
+        print("no cells matched the filters — algorithms: " + ", ".join(x.id for x in m.algorithms)
+              + "; suites: " + ", ".join(x.id for x in m.suites) + ("; tags: " + ", ".join(tags) if tags else ""))
     return 0 if doc["ok"] else 1
 
 
@@ -224,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--work-dir")
     sp.add_argument("--strict", action="store_true", help="v1 layout: NotImplementedError fails")
     sp.add_argument("--v2", action="store_true", help="force the v2 gate on a v1 layout")
+    sp.add_argument("--all-suites", action="store_true", help="run every suite, not just each algorithm's first")
     sp.set_defaults(fn=cmd_verify)
 
     sp = sub.add_parser("run", help="run one algorithm on one suite")
@@ -247,6 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tolerance", type=float, help="override every rel_tolerance")
     sp.add_argument("--json", metavar="FILE", help="write the report (usable as a future --baseline)")
     sp.add_argument("-j", "--jobs", type=int, default=1)
+    sp.add_argument("--timeout", type=float, help="per-run timeout override (seconds)")
+    sp.add_argument("--log", action="store_true", help="show program output / setup log of failing cells")
     sp.add_argument("--work-dir")
     sp.add_argument("-q", "--quiet", action="store_true")
     sp.set_defaults(fn=cmd_test)

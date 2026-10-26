@@ -52,11 +52,36 @@ class RunOutcome:
     run_dir: str = ""
 
 
-def resolve_suite_path(suite: SuiteSpec, repo_root: str) -> str | None:
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+class SuiteResolutionError(ValueError):
+    pass
+
+
+def expand_vars(text: str, env: dict[str, str] | None = None) -> tuple[str, list[str]]:
+    """Expand ``${VAR}``, ``${VAR:-default}`` and ``$VAR``; returns (text, unset variable names)."""
+    env = dict(os.environ) if env is None else env
+    missing: list[str] = []
+
+    def repl(m: re.Match) -> str:
+        name = m.group(1) or m.group(3)
+        if name in env and env[name] != "":
+            return env[name]
+        if m.group(2) is not None:
+            return m.group(2)
+        missing.append(name)
+        return m.group(0)
+
+    return _VAR.sub(repl, text), missing
+
+
+def resolve_suite_path(suite: SuiteSpec, repo_root: str, env: dict[str, str] | None = None) -> str | None:
     """Local filesystem path for a suite uri, or None for remote schemes / empty uris.
 
-    ``${VAR}`` and ``~`` expand on the runner host, so each machine can keep datasets wherever
-    it likes (``uri: "${DATASETS}/vision/full"``).
+    ``${VAR}``, ``${VAR:-default}``, ``$VAR`` and ``~`` expand on the runner host (its environment
+    plus ``env.vars``), so each machine can keep datasets wherever it likes. Raises
+    SuiteResolutionError when a variable is unset or the resolved local path does not exist.
     """
     uri = (suite.uri or "").strip()
     if not uri:
@@ -64,9 +89,39 @@ def resolve_suite_path(suite: SuiteSpec, repo_root: str) -> str | None:
     if "://" in uri and not uri.startswith("file://"):
         return None
     uri = uri.removeprefix("file://")
-    uri = os.path.expanduser(os.path.expandvars(uri))
-    path = uri if os.path.isabs(uri) else os.path.join(repo_root, uri)
-    return os.path.abspath(path)
+    expanded, missing = expand_vars(uri, env)
+    if missing:
+        raise SuiteResolutionError(
+            f"suite {suite.id!r}: environment variable(s) {', '.join(sorted(set(missing)))} not set "
+            f"on this runner (uri {suite.uri!r})")
+    expanded = os.path.expanduser(expanded)
+    path = os.path.abspath(expanded if os.path.isabs(expanded) else os.path.join(repo_root, expanded))
+    if not os.path.exists(path):
+        raise SuiteResolutionError(f"suite {suite.id!r}: path does not exist on this runner: {path}")
+    return path
+
+
+_ANY_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?::[^}]*)?)\}")
+_PLACEHOLDER_NAMES = {"request", "result", "output_dir", "params", "suite_path", "suite_uri", "run_id", "repo_root"}
+
+
+def placeholders_in(texts: list[str]) -> tuple[list[str], list[str]]:
+    """(unknown placeholder names, parameter keys used via {param:key}) in command strings.
+
+    Shell braces that are not identifiers (``{print $1}``, ``${VAR}``) are not placeholders.
+    """
+    unknown: list[str] = []
+    keys: list[str] = []
+    for text in texts:
+        for m in _ANY_PLACEHOLDER.finditer(text):
+            if m.start() > 0 and text[m.start() - 1] == "$":
+                continue  # ${VAR} is a shell variable
+            name = m.group(1)
+            if name.startswith("param:"):
+                keys.append(name[len("param:"):])
+            elif ":" not in name and name not in _PLACEHOLDER_NAMES:
+                unknown.append(name)
+    return unknown, keys
 
 
 def _env_key(key: str) -> str:
@@ -195,7 +250,13 @@ async def execute_run(
     os.makedirs(sdk_dir, exist_ok=True)
     shutil.copyfile(SDK_FILE, os.path.join(sdk_dir, "algops_sdk.py"))
 
-    suite_path = resolve_suite_path(suite, repo_root)
+    expand_env = dict(os.environ)
+    expand_env.update(manifest.env.vars)
+    try:
+        suite_path = resolve_suite_path(suite, repo_root, expand_env)
+    except SuiteResolutionError as exc:
+        return RunOutcome(_fail(req, "setup", str(exc), started, commit_sha=sha, param_values=params),
+                          run_dir=run_dir)
     request = {
         "protocol": PROTOCOL_REQUEST,
         "run_id": req.run_id,
@@ -270,6 +331,12 @@ async def execute_run(
     except FileNotFoundError as exc:
         return RunOutcome(_fail(req, "program", f"entrypoint not found: {exc}", started,
                                 commit_sha=sha, param_values=params), run_dir=run_dir)
+    except PermissionError as exc:
+        return RunOutcome(_fail(req, "program", f"entrypoint is not executable (chmod +x?): {exc}",
+                                started, commit_sha=sha, param_values=params), run_dir=run_dir)
+    except OSError as exc:
+        return RunOutcome(_fail(req, "program", f"cannot start entrypoint: {exc}", started,
+                                commit_sha=sha, param_values=params), run_dir=run_dir)
     log = proc.output
     files = _collect(out_dir, run_dir)
     files["_algops/log.txt"] = log.encode("utf-8")
@@ -291,15 +358,19 @@ async def execute_run(
         return done(_fail(req, kind, f"{msg}\n{tail}".strip(), started, commit_sha=sha, param_values=params))
 
     status = str(data.get("status", "ok")).lower()
+    if status == "failed":
+        return done(_fail(req, "program", str(data.get("error") or "program reported status=failed"),
+                          started, commit_sha=sha, param_values=params, extra=data.get("extra") or {}))
     if status not in ("ok", "evaluated"):
-        return done(_fail(req, "program", str(data.get("error") or f"status={status}"), started,
-                          commit_sha=sha, param_values=params, extra=data.get("extra") or {}))
+        return done(_fail(req, "protocol", f"result status must be 'ok' or 'failed' (got {status!r})",
+                          started, commit_sha=sha, param_values=params))
     if proc.returncode != 0:
         return done(_fail(req, "program", f"exit code {proc.returncode} after writing result\n{tail}",
                           started, commit_sha=sha, param_values=params))
 
+    raw_metrics = data.get("metrics") or {}
     try:
-        metrics = normalize_metrics(data.get("metrics") or {})
+        metrics = normalize_metrics(raw_metrics)
         counts = data.get("counts")
         if counts is not None:
             counts = {k: int(v) for k, v in counts.items()}
@@ -309,9 +380,14 @@ async def execute_run(
     except Exception as exc:  # noqa: BLE001
         return done(_fail(req, "protocol", f"malformed metrics/counts: {exc}", started,
                           commit_sha=sha, param_values=params))
+    dropped = sorted(str(k) for k in raw_metrics if str(k) not in metrics) if isinstance(raw_metrics, dict) else []
     if not metrics:
-        return done(_fail(req, "protocol", "result has no metrics (and no counts)", started,
+        why = f" (non-numeric values dropped: {dropped})" if dropped else ""
+        return done(_fail(req, "protocol", f"result has no numeric metrics and no counts{why}", started,
                           commit_sha=sha, param_values=params))
+    extra = dict(data.get("extra") or {})
+    if dropped:
+        extra["dropped_metrics"] = dropped
 
     telemetry = data.get("telemetry")
     manifest_uri = None
@@ -330,5 +406,5 @@ async def execute_run(
         commit_sha=sha,
         duration_s=round(time.monotonic() - started, 6),
         param_values=params,
-        extra=data.get("extra") or {},
+        extra=extra,
     ))

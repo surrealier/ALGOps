@@ -116,7 +116,7 @@ algorithms:
     ("import os,sys; open(os.environ['ALGOPS_RESULT'],'w').write('{\"metrics\":{\"a\":1}}'); sys.exit(1)",
      "program", "after writing result"),
     ("import os; open(os.environ['ALGOPS_RESULT'],'w').write('{\"status\":\"ok\",\"metrics\":{}}')",
-     "protocol", "no metrics"),
+     "protocol", "no numeric metrics"),
     ("import os; open(os.environ['ALGOPS_RESULT'],'w').write('{\"status\":\"failed\",\"error\":\"boom\"}')",
      "program", "boom"),
 ])
@@ -201,3 +201,68 @@ async def test_local_revision_tracks_edits(tmp_path):
 def test_manifest_command_validation():
     m = parse_manifest({"algorithms": [{"id": "a", "entrypoint": {"python": "x.py:run"}}]})
     assert m.algorithm("a").entrypoint.python == "x.py:run"
+
+
+async def test_non_executable_entrypoint_and_bad_status(tmp_path):
+    from algops.contract.validate import validate_repo
+
+    root = _repo(tmp_path, "algops: 2\nalgorithms:\n  - id: x\n    entrypoint: {command: [\"./run.sh\"]}\n",
+                 {"run.sh": "#!/bin/sh\necho hi\n"})
+    out = await execute_run(RunRequest(run_id=new_id(), project_id="p", algorithm_id="x"),
+                            repo_root=root, manifest=load_manifest(root), work_dir=str(tmp_path / "w"))
+    assert out.result.error_kind == "program" and "not executable" in out.result.error
+    rep = validate_repo(root)
+    assert not rep.ok and any("not executable" in f.message for f in rep.findings)
+
+
+async def test_unknown_status_and_non_numeric_metrics_are_explained(tmp_path):
+    code = "import os; open(os.environ['ALGOPS_RESULT'],'w').write('{\"status\":\"success\",\"metrics\":{\"a\":1}}')"
+    root = _repo(tmp_path, _py_cmd(code), {})
+    out = await execute_run(RunRequest(run_id=new_id(), project_id="p", algorithm_id="x"),
+                            repo_root=root, manifest=load_manifest(root), work_dir=str(tmp_path / "w"))
+    assert out.result.error_kind == "protocol" and "'success'" in out.result.error
+
+
+async def test_unset_suite_variable_and_default_syntax(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALGOPS_NOPE", raising=False)
+    code = "import os,json; open(os.environ['ALGOPS_RESULT'],'w').write(json.dumps({'metrics':{'n':1}}))"
+    (tmp_path / "fallback").mkdir()
+    manifest = _py_cmd(code) + (
+        "suites:\n  - {id: a, uri: '${ALGOPS_NOPE}/x'}\n"
+        f"  - {{id: b, uri: '${{ALGOPS_NOPE:-{tmp_path / 'fallback'}}}'}}\n")
+    root = _repo(tmp_path, manifest, {})
+    m = load_manifest(root)
+    bad = await execute_run(RunRequest(run_id=new_id(), project_id="p", algorithm_id="x", suite_id="a"),
+                            repo_root=root, manifest=m, work_dir=str(tmp_path / "w"))
+    assert bad.result.error_kind == "setup" and "ALGOPS_NOPE" in bad.result.error
+    ok = await execute_run(RunRequest(run_id=new_id(), project_id="p", algorithm_id="x", suite_id="b"),
+                           repo_root=root, manifest=m, work_dir=str(tmp_path / "w"))
+    assert ok.result.status == RunStatus.evaluated, ok.result.error
+
+
+async def test_setup_failure_reports_compiler_output(tmp_path):
+    manifest = "algops: 2\nenv:\n  setup: [\"echo 'main.go:9: syntax error' >&2; exit 2\"]\n" + _py_cmd("pass").split("\n", 2)[2]
+    root = _repo(tmp_path, manifest, {})
+    eng = RunnerEngine(str(tmp_path / "w"), local_projects={"r": root})
+    out = await eng.run(_req("r", "x", "default"))
+    assert out.result.error_kind == "setup"
+    assert "syntax error" in out.result.error and "full log:" in out.result.error
+
+
+async def test_untracked_files_change_the_local_revision(tmp_path):
+    from .conftest import git as g
+
+    root = tmp_path / "gitrepo"
+    root.mkdir()
+    (root / "a.txt").write_text("1", encoding="utf-8")
+    g("init", "-q", "-b", "main", str(root))
+    g("add", "-A", cwd=str(root))
+    g("commit", "-q", "-m", "init", cwd=str(root))
+    clean = (await Workspace.local_revision(str(root))).sha
+    (root / "new_source.go").write_text("package main", encoding="utf-8")
+    (root / "build").mkdir()
+    (root / "build" / "out.bin").write_text("x", encoding="utf-8")
+    dirty = (await Workspace.local_revision(str(root))).sha
+    assert "-dirty-" not in clean and dirty.startswith(clean + "-dirty-")
+    os.remove(root / "new_source.go")
+    assert (await Workspace.local_revision(str(root))).sha == clean  # build/ outputs are ignored

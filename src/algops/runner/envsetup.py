@@ -59,9 +59,12 @@ class EnvSetup:
                 if not res.ok:
                     why = "timed out" if res.timed_out else f"exit {res.returncode}"
                     log = "\n".join(logs)
-                    with open(os.path.join(self.root, key + ".failed.log"), "w", encoding="utf-8") as fh:
+                    log_path = os.path.join(self.root, key + ".failed.log")
+                    with open(log_path, "w", encoding="utf-8") as fh:
                         fh.write(log)
-                    return SetupOutcome(ok=False, log=log, error=f"env.setup `{cmd}` failed ({why})")
+                    tail = "\n".join(res.output.strip().splitlines()[-25:])
+                    return SetupOutcome(ok=False, log=log, error=(
+                        f"env.setup `{cmd}` failed ({why}) — full log: {log_path}\n{tail}").strip())
             log = "\n".join(logs)
             with open(marker, "w", encoding="utf-8") as fh:
                 fh.write(log[-100_000:])

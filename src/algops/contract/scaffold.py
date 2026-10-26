@@ -26,11 +26,22 @@ def _write(path: str, text: str, force: bool, written: list[str], skipped: list[
     written.append(path)
 
 
+def algorithm_snippet(algorithm: str, lang: str) -> str:
+    entry = (f'python: "algops/{algorithm}/run.py:run"' if lang == "python"
+             else f'command: ["sh", "algops/{algorithm}/run.sh"]')
+    return (f"  - id: {algorithm}\n"
+            f"    params: algops/{algorithm}/params.yaml\n"
+            f"    entrypoint: {{ {entry} }}\n"
+            f"    metrics: {{ presets: [binary] }}\n"
+            f"    gates: [{{ metric: recall, op: \">=\", value: 0.5 }}]\n")
+
+
 def init_repo(root: str, *, algorithm: str = "main", lang: str = "python", name: str | None = None,
               force: bool = False, with_docs: bool = True) -> tuple[list[str], list[str]]:
     """Write the v2 scaffold into ``root``. Returns (written, skipped-existing)."""
     if not re.match(r"^[a-z][a-z0-9_-]{0,63}$", algorithm):
-        raise ValueError(f"invalid algorithm id {algorithm!r}")
+        raise ValueError(f"invalid algorithm id {algorithm!r}: use lowercase letters, digits, '-' or '_' "
+                         "(starting with a letter, max 64 chars)")
     if lang not in ("python", "command"):
         raise ValueError("lang must be 'python' or 'command'")
     root = os.path.abspath(root)

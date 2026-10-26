@@ -1,8 +1,9 @@
 """Static validation (``algops validate``) and the executable gate (``algops verify``) for v2 repos.
 
-``validate`` never runs user code: manifest schema, parameter specs, entrypoint files, metric
-declarations, suite paths. ``verify`` additionally executes every algorithm once with its
-default parameters on its first suite through the real runner engine and requires a
+``validate`` never runs user code: manifest schema, parameter specs, entrypoint files (and their
+executable bit), command placeholders, metric declarations for gates/objectives, suite paths.
+``verify`` additionally executes every algorithm once with its default parameters on its first
+suite (``--all-suites``: every suite) through the real runner engine and requires a
 schema-valid result that reports the objective and gate metrics — the externalization is done
 only when this exits 0.
 """
@@ -14,7 +15,6 @@ import shlex
 from dataclasses import dataclass, field
 
 from algops.core import ManifestError, RepoManifest, RunStatus, load_manifest
-from algops.core.metrics import known_direction
 
 
 @dataclass
@@ -45,10 +45,6 @@ class ValidationReport:
         return "\n".join(lines)
 
 
-def _declared_or_known(name: str, declared: dict) -> bool:
-    return name in declared or known_direction(name) is not None
-
-
 def validate_repo(repo_root: str) -> ValidationReport:
     rep = ValidationReport()
     try:
@@ -60,12 +56,16 @@ def validate_repo(repo_root: str) -> ValidationReport:
     kind = "legacy v1 layout (algops/params.yaml)" if manifest.legacy else "algops.yaml"
     rep.add("ok", "manifest", f"{kind}: {len(manifest.algorithms)} algorithm(s), {len(manifest.suites)} suite(s)")
 
+    from algops.runner.protocol import SuiteResolutionError, placeholders_in, resolve_suite_path
+
+    env = dict(os.environ)
+    env.update(manifest.env.vars)
     for suite in manifest.suites:
-        uri = suite.uri or ""
-        if uri and "://" not in uri and "$" not in uri:
-            path = uri if os.path.isabs(uri) else os.path.join(repo_root, uri)
-            if not os.path.exists(path):
-                rep.add("warn", f"suite {suite.id}", f"path does not exist here: {uri}")
+        try:
+            resolve_suite_path(suite, repo_root, env)
+        except SuiteResolutionError as exc:
+            # Datasets may legitimately live only on runner hosts — warn, don't fail.
+            rep.add("warn", f"suite {suite.id}", f"{exc} (fine if it exists on the runners)")
 
     for algo in manifest.algorithms:
         where = f"algorithm {algo.id}"
@@ -89,32 +89,39 @@ def validate_repo(repo_root: str) -> ValidationReport:
                     level = "warn" if manifest.env.setup else "error"
                     rep.add(level, where, f"command {exe} not found"
                             + (" (built by env.setup?)" if level == "warn" else ""))
+                elif os.name != "nt" and not os.access(path, os.X_OK):
+                    rep.add("error", where, f"command {exe} is not executable (chmod +x, or run it via an "
+                                            "interpreter, e.g. [\"sh\", \"{exe}\"])")
         elif isinstance(ep.command, str):
             try:
                 shlex.split(ep.command)
             except ValueError as exc:
                 rep.add("error", where, f"unparseable shell command: {exc}")
+        if ep.command is not None:
+            texts = ep.command if isinstance(ep.command, list) else [ep.command]
+            known, params_used = placeholders_in(texts)
+            for name in known:
+                rep.add("warn", where, f"{{{name}}} is not a placeholder — it is passed to the program literally")
+            for key in params_used:
+                if key not in spec.by_key():
+                    rep.add("error", where, f"placeholder {{param:{key}}} names an undeclared parameter")
         declared = algo.metric_specs()
         if not declared:
             rep.add("warn", where, "no metrics declared (add `metrics: { presets: [...], declare: [...] }`)")
-        obj = algo.default_objective()
-        if obj is None:
+        if algo.objective is not None:
+            for name in [algo.objective.metric, *[c.metric for c in algo.objective.constraints]]:
+                if name not in declared:
+                    rep.add("error", where, f"objective metric {name!r} is not declared in metrics (typo?)")
+        elif algo.default_objective() is None:
             rep.add("warn", where, "no objective (campaigns will require one explicitly)")
-        else:
-            for name in [obj.metric, *[c.metric for c in obj.constraints]]:
-                if not _declared_or_known(name, declared):
-                    rep.add("warn", where, f"objective metric {name!r} is not declared (direction guessed)")
         for g in algo.gates:
-            if not _declared_or_known(g.metric, declared):
-                rep.add("warn", where, f"gate metric {g.metric!r} is not declared")
-        stages = {p.stage for p in spec.params}
-        if spec.params and not stages:
-            rep.add("warn", where, "parameters have no stage ids")
+            if g.metric not in declared:
+                rep.add("error", where, f"gate metric {g.metric!r} is not declared in metrics (typo?)")
     return rep
 
 
 async def verify_repo(repo_root: str, *, work_dir: str | None = None,
-                      algorithms: list[str] | None = None) -> ValidationReport:
+                      algorithms: list[str] | None = None, all_suites: bool = False) -> ValidationReport:
     from algops.core import RepoRef, RunRequest, new_id
     from algops.runner.engine import RunnerEngine
     from algops.runner.localtest import default_work_dir
@@ -125,10 +132,13 @@ async def verify_repo(repo_root: str, *, work_dir: str | None = None,
     manifest = rep.manifest
     name = manifest.name or "verify"
     engine = RunnerEngine(work_dir or default_work_dir(), local_projects={name: os.path.abspath(repo_root)})
+    jobs = []
     for algo in manifest.algorithms:
         if algorithms and algo.id not in algorithms:
             continue
-        suite = manifest.suites_for(algo.id)[0]
+        suites = manifest.suites_for(algo.id)
+        jobs += [(algo, su) for su in (suites if all_suites else suites[:1])]
+    for algo, suite in jobs:
         req = RunRequest(run_id=new_id(), project_id=name, kind="adhoc",
                          repo=RepoRef(kind="local", name=name), algorithm_id=algo.id, suite_id=suite.id)
         out = await engine.run(req)
