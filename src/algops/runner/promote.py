@@ -9,11 +9,14 @@ the patch. Optionally the branch is pushed so the master can open a PR / MR.
 from __future__ import annotations
 
 import io
+import json
 import os
+import re
 import shutil
 import tempfile
 from typing import Any
 
+import yaml
 from ruamel.yaml import YAML
 
 from algops.core import PromoteRequest, PromoteResult, load_manifest
@@ -62,37 +65,120 @@ def _typed(new: Any, old: Any) -> Any:
     return new
 
 
+def _yaml_scalar(value: Any) -> str:
+    """Render a scalar so PyYAML (YAML 1.1) reads back the same type."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        text = f"{value:.12g}"
+        if "e" in text or "E" in text:
+            text = f"{value:.6e}"
+        elif "." not in text and "inf" not in text and "nan" not in text:
+            text += ".0"
+        return text
+    text = str(value)
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.\-]*", text) and text.lower() not in (
+            "true", "false", "yes", "no", "on", "off", "null", "none", "~"):
+        return text
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _token_end(line: str, col: int) -> int:
+    if col < len(line) and line[col] in "\"'":
+        q = line[col]
+        i = col + 1
+        while i < len(line):
+            if line[i] == q and (q == "'" or line[i - 1] != "\\"):
+                if q == "'" and i + 1 < len(line) and line[i + 1] == "'":
+                    i += 2
+                    continue
+                return i + 1
+            i += 1
+        return len(line)
+    i = col
+    while i < len(line) and line[i] not in ",}]#\r\n":
+        i += 1
+    while i > col and line[i - 1] in " \t":
+        i -= 1
+    return i
+
+
+def _splice(line: str, col: int, new_text: str) -> str:
+    end = _token_end(line, col)
+    old_len = end - col
+    rest = line[end:]
+    m = re.match(r"^( +)(#.*)$", rest.rstrip("\r\n"))
+    if m:  # keep a trailing comment in its column when possible
+        pad = max(1, len(m.group(1)) - (len(new_text) - old_len))
+        nl = rest[len(rest.rstrip("\r\n")):]
+        rest = " " * pad + m.group(2) + nl
+    return line[:col] + new_text + rest
+
+
 def rewrite_defaults(path: str, algorithm_id: str, inline: bool,
                      values: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Rewrite ``default:`` for ``values`` in the YAML file at ``path``; returns the changes."""
+    """Rewrite ``default:`` for ``values`` in the YAML file at ``path``; returns the changes.
+
+    Surgical: only the default scalars' text changes (comments, flow-style spacing, key order
+    stay byte-identical) so the proposed commit is a minimal, reviewable diff. Falls back to a
+    ruamel round-trip dump if the surgical edit cannot be verified.
+    """
     y = _yaml()
     with open(path, encoding="utf-8") as fh:
-        doc = y.load(fh)
+        original = fh.read()
+    doc = y.load(original)
     items = _param_items(doc, algorithm_id, inline)
     by_key = {str(item.get("key")): item for item in items if hasattr(item, "get")}
     missing = [k for k in values if k not in by_key]
     if missing:
         raise KeyError(f"parameters not declared in {os.path.basename(path)}: {missing}")
     changed: dict[str, dict[str, Any]] = {}
+    edits: list[tuple[int, int, str]] = []
     for key, new in values.items():
         item = by_key[key]
         old = item.get("default")
         if _same(old, new):
             continue
-        item["default"] = _typed(new, old)
-        changed[key] = {"old": old, "new": item["default"]}
-    if changed:
+        typed = _typed(new, old)
+        changed[key] = {"old": old, "new": typed}
+        try:
+            line, col = item.lc.value("default")
+            edits.append((line, col, _yaml_scalar(typed)))
+        except Exception:  # noqa: BLE001 — no position info: use the fallback dump
+            edits = []
+            break
+    if not changed:
+        return changed
+    text = None
+    if len(edits) == len(changed):
+        lines = original.splitlines(keepends=True)
+        for line, col, new_text in sorted(edits, reverse=True):
+            lines[line] = _splice(lines[line], col, new_text)
+        candidate = "".join(lines)
+        try:
+            check = _param_items(yaml.safe_load(candidate), algorithm_id, inline)
+            got = {str(i.get("key")): i.get("default") for i in check}
+            if all(_same(got.get(k), c["new"]) for k, c in changed.items()):
+                text = candidate
+        except Exception:  # noqa: BLE001
+            text = None
+    if text is None:
+        for key, c in changed.items():
+            by_key[key]["default"] = c["new"]
         buf = io.StringIO()
         y.dump(doc, buf)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
+        text = buf.getvalue()
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
     return changed
 
 
 async def promote(req: PromoteRequest, *, workspace: Workspace, local_path: str | None,
                   author_name: str, author_email: str, push_remote: str = "origin") -> PromoteResult:
     base = req.repo.sha
-    if not base or base == "local" or base.endswith("-dirty"):
+    if not base or base.startswith("local") or "-dirty" in base:
         return PromoteResult(ok=False, base_sha=base,
                              error="promotion needs a clean committed base sha (campaign ran on "
                                    "uncommitted/local code — commit it and re-run the campaign)")

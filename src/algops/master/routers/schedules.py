@@ -8,8 +8,9 @@ from algops.core import ScheduleCreate, ScheduleOut
 from algops.tracking import get_session, repo
 from algops.tracking.models import Schedule
 
-from ..services.scheduler import next_cron, valid_cron
-from .deps import require_api
+from ..context import MasterContext
+from ..services.scheduler import Scheduler, next_cron, valid_cron
+from .deps import get_ctx, require_api
 
 router = APIRouter(prefix="/api/v1/schedules", tags=["schedules"])
 
@@ -44,7 +45,7 @@ def create_schedule(body: ScheduleCreate) -> ScheduleOut:
             interval_s=body.interval_s, scope=scope, enabled=body.enabled,
         )
         if row.kind == "cron" and row.cron:
-            row.next_fire_at = next_cron(row.cron, repo.utcnow())
+            row.next_fire_at = next_cron(row.cron, repo.utcnow()).astimezone(repo.utcnow().tzinfo)
         return _out(row)
 
 
@@ -62,6 +63,15 @@ def toggle(schedule_id: str, enabled: bool) -> ScheduleOut:
             raise HTTPException(404, "schedule not found")
         row.enabled = enabled
         return _out(row)
+
+
+@router.post("/{schedule_id}/fire", dependencies=[Depends(require_api)])
+async def fire(schedule_id: str, ctx: MasterContext = Depends(get_ctx)) -> dict:
+    """Run now: a cron schedule starts its benchmark; a watch schedule checks for new commits."""
+    out = await Scheduler(ctx).fire(schedule_id)
+    if out.get("error"):
+        raise HTTPException(404, out["error"])
+    return out
 
 
 @router.delete("/{schedule_id}", dependencies=[Depends(require_api)])

@@ -213,7 +213,7 @@ def make_nodes(deps: LoopDeps) -> dict[str, Any]:
     async def run_eval(state: AlgOpsState) -> dict:
         batch = state.get("current_batch") or []
         if not batch:
-            return {"last_csv_uri": None}
+            return {}
         obj = state_objective(state)
         derived = state.get("best_run_id") or state.get("last_run_id")
         entries = await asyncio.gather(*(
@@ -233,6 +233,8 @@ def make_nodes(deps: LoopDeps) -> dict[str, Any]:
         }
 
     async def extract_csv(state: AlgOpsState) -> dict:
+        if not state.get("current_batch"):
+            return {}  # nothing evaluated this iteration (search converged) — keep the last analysis
         uri = state.get("last_csv_uri")
         text = hooks.fetch_text(uri) if uri else None
         if not text:

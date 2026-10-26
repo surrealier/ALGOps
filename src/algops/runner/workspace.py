@@ -40,6 +40,29 @@ async def git(*args: str, cwd: str | None = None, timeout: float = 600.0,
     return res.output.strip()
 
 
+_FP_SKIP = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__", "build", "dist",
+            "target", "out", ".algops", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".idea", ".vscode"}
+
+
+def _fingerprint(root: str, limit: int = 50_000) -> str:
+    """Cheap content fingerprint of a non-git directory: (path, size, mtime) of its files."""
+    h = hashlib.sha1()
+    count = 0
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in _FP_SKIP and not d.startswith("."))
+        for name in sorted(files):
+            try:
+                st = os.stat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            h.update(f"{rel}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+            count += 1
+            if count >= limit:
+                return h.hexdigest()[:12]
+    return h.hexdigest()[:12]
+
+
 def _slug(text: str) -> str:
     base = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")[-40:] or "repo"
     return f"{base}-{hashlib.sha1(text.encode()).hexdigest()[:8]}"
@@ -160,14 +183,24 @@ class Workspace:
 
     @staticmethod
     async def local_revision(path: str) -> Checkout:
+        """HEAD (+ ``-dirty-<diffhash>``) for a git repository root, else ``local-<fingerprint>``.
+
+        The suffixes change whenever the code changes, so per-revision caches (env.setup, the
+        master's revision table) never serve stale results for edited local code.
+        """
         path = os.path.abspath(path)
         try:
             top = await git("-C", path, "rev-parse", "--show-toplevel", timeout=30)
         except (GitError, FileNotFoundError):
-            return Checkout(path=path, sha="local")
-        if os.path.realpath(top) != os.path.realpath(path):
-            return Checkout(path=path, sha="local")
-        sha = await git("-C", path, "rev-parse", "HEAD", timeout=30)
-        status = await git("-C", path, "status", "--porcelain", "--untracked-files=no", timeout=60)
-        dirty = bool(status.strip())
-        return Checkout(path=path, sha=sha + ("-dirty" if dirty else ""), dirty=dirty)
+            top = None
+        if top is None or os.path.realpath(top) != os.path.realpath(path):
+            return Checkout(path=path, sha="local-" + _fingerprint(path), dirty=True)
+        try:
+            sha = await git("-C", path, "rev-parse", "HEAD", timeout=30)
+        except GitError:  # a repository without commits yet
+            return Checkout(path=path, sha="local-" + _fingerprint(path), dirty=True)
+        diff = await git("-C", path, "diff", "HEAD", "--binary", timeout=120)
+        if not diff.strip():
+            return Checkout(path=path, sha=sha)
+        digest = hashlib.sha1(diff.encode("utf-8", "replace")).hexdigest()[:8]
+        return Checkout(path=path, sha=f"{sha}-dirty-{digest}", dirty=True)

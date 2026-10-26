@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"])
 
 
 @router.post("", response_model=BenchmarkOut, dependencies=[Depends(require_api)])
-def create_benchmark(body: BenchmarkCreate, ctx: MasterContext = Depends(get_ctx)) -> BenchmarkOut:
+async def create_benchmark(body: BenchmarkCreate, ctx: MasterContext = Depends(get_ctx)) -> BenchmarkOut:
     scope = None
     if body.scope:
         scope = []

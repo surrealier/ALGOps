@@ -12,7 +12,7 @@ Run it in exactly ONE master process (``scheduler_enabled``); ``tick()`` is idem
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from croniter import croniter
 
@@ -32,6 +32,11 @@ def _local_now() -> datetime:
 def next_cron(expr: str, after: datetime) -> datetime:
     base = after.astimezone() if after.tzinfo else after.replace(tzinfo=_local_now().tzinfo)
     return croniter(expr, base).get_next(datetime)
+
+
+def _utc(dt: datetime) -> datetime:
+    """Store UTC only — SQLite drops tzinfo, and naive values are read back as UTC."""
+    return dt.astimezone(timezone.utc)
 
 
 def valid_cron(expr: str) -> bool:
@@ -72,6 +77,34 @@ class Scheduler:
             started.append(bid)
         return started
 
+    def _snapshot(self, schedule_id: str) -> dict | None:
+        with get_session() as s:
+            sc = repo.get_schedule(s, schedule_id)
+            if sc is None:
+                return None
+            return {"id": sc.schedule_id, "name": sc.name, "kind": sc.kind, "cron": sc.cron,
+                    "interval_s": sc.interval_s, "scope": sc.scope, "enabled": sc.enabled,
+                    "last": repo.aware(sc.last_fired_at), "created": repo.aware(sc.created_at),
+                    "last_seen": dict(sc.last_seen or {})}
+
+    async def fire(self, schedule_id: str, now: datetime | None = None) -> dict:
+        """Run a schedule *now* (cron: start its benchmark; watch: check for new commits)."""
+        now = now or _local_now()
+        sc = self._snapshot(schedule_id)
+        if sc is None:
+            return {"error": "schedule not found"}
+        if sc["kind"] == "cron":
+            bid = start_benchmark(self.ctx, name=f"{sc['name']} (수동 실행)", scope=sc["scope"],
+                                  baseline="previous", trigger="schedule", schedule_id=sc["id"])
+            with get_session() as s:
+                row = repo.get_schedule(s, sc["id"])
+                if row is not None:
+                    row.last_benchmark_id = bid
+            return {"benchmark_id": bid}
+        sc["last"] = None  # bypass the interval
+        bid = await self._tick_watch(sc, now)
+        return {"benchmark_id": bid, "changed": bool(bid)}
+
     def _tick_cron(self, sc: dict, now: datetime) -> str | None:
         anchor = sc["last"] or sc["created"] or now
         try:
@@ -82,16 +115,16 @@ class Scheduler:
             with get_session() as s:
                 row = repo.get_schedule(s, sc["id"])
                 if row is not None and repo.aware(row.next_fire_at) != due:
-                    row.next_fire_at = due
+                    row.next_fire_at = _utc(due)
             return None
         bid = start_benchmark(self.ctx, name=f"{sc['name']} ({now:%Y-%m-%d %H:%M})", scope=sc["scope"],
                               baseline="previous", trigger="schedule", schedule_id=sc["id"])
         with get_session() as s:
             row = repo.get_schedule(s, sc["id"])
             if row is not None:
-                row.last_fired_at = now
+                row.last_fired_at = _utc(now)
                 row.last_benchmark_id = bid
-                row.next_fire_at = next_cron(sc["cron"], now)
+                row.next_fire_at = _utc(next_cron(sc["cron"], now))
         return bid
 
     async def _changed_projects(self, project_ids: list[str], last_seen: dict[str, str]) -> tuple[list[dict], dict[str, str]]:
@@ -124,7 +157,7 @@ class Scheduler:
         with get_session() as s:
             row = repo.get_schedule(s, sc["id"])
             if row is not None:
-                row.last_fired_at = now
+                row.last_fired_at = _utc(now)
                 row.last_seen = seen
                 if bid:
                     row.last_benchmark_id = bid

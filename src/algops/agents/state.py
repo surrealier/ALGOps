@@ -56,6 +56,7 @@ class AlgOpsState(TypedDict, total=False):
     last_run_id: str
     last_metrics: dict
     last_score: float | None
+    last_csv_uri: str | None
     csv_drop_reasons: dict
     csv_n_items: int
     csv_sensitivity: dict
