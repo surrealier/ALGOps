@@ -1,21 +1,22 @@
-"""Master FastAPI application factory (control plane + live WebSocket + UI)."""
+"""Master FastAPI application factory (control plane + live WebSocket + UI + scheduler)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from algops import __version__
 from algops.core import MasterSettings
-from algops.rag import get_rag_store
-from algops.tracking import get_artifact_store, init_engine
+from algops.tracking import init_engine
 
-from .bus import get_command_bus
-from .routers import artifacts, experiments, llm, projects, runs, slaves
-from .ws import get_ws_broker
+from .context import build_context
+from .routers import artifacts, benchmarks, experiments, llm, projects, runs, schedules, slaves
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _FRONTEND_DIST = os.path.abspath(
@@ -23,51 +24,80 @@ _FRONTEND_DIST = os.path.abspath(
 )
 
 
+def _ui_dir() -> str | None:
+    """A built React UI: ``frontend/dist`` (dev checkout / Docker) or the packaged copy."""
+    for d in (_FRONTEND_DIST, os.path.join(_STATIC_DIR, "ui")):
+        if os.path.isfile(os.path.join(d, "index.html")):
+            return d
+    return None
+
+
 def create_app(settings: MasterSettings | None = None) -> FastAPI:
     settings = settings or MasterSettings()
     init_engine(settings)
+    ctx = build_context(settings)
 
-    app = FastAPI(title="ALGOps Master", version="0.0.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        task = None
+        if settings.scheduler_enabled:
+            from .services.scheduler import Scheduler
+
+            task = asyncio.create_task(Scheduler(ctx).run_forever())
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+
+    app = FastAPI(title="ALGOps Master", version=__version__, lifespan=lifespan)
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     app.state.settings = settings
-    app.state.bus = get_command_bus(settings)
-    app.state.ws = get_ws_broker(settings)
-    app.state.store = get_artifact_store(settings)
-    app.state.rag = get_rag_store(settings)  # in-memory (dev) or Qdrant+Neo4j (prod)
-    app.state.tasks = set()
+    app.state.ctx = ctx
+    # Back-compat aliases (v1 code paths and tests read these directly).
+    app.state.bus = ctx.bus
+    app.state.ws = ctx.ws
+    app.state.store = ctx.store
+    app.state.rag = ctx.rag
+    app.state.tasks = ctx.tasks
 
-    for module in (projects, experiments, runs, slaves, artifacts, llm):
+    for module in (projects, experiments, runs, slaves, artifacts, llm, benchmarks, schedules):
         app.include_router(module.router)
 
     @app.get("/healthz")
     def healthz() -> dict:
-        return {"status": "ok", "dev_mode": settings.dev_mode}
+        return {"status": "ok", "dev_mode": settings.dev_mode, "version": __version__,
+                "auth": bool(settings.api_token)}
 
-    @app.websocket("/ws/experiments/{experiment_id}")
-    async def ws_experiment(ws: WebSocket, experiment_id: str) -> None:
+    async def _ws(ws: WebSocket, channel: str) -> None:
         await ws.accept()
-        await app.state.ws.subscribe(experiment_id, ws)
+        await ctx.ws.subscribe(channel, ws)
         try:
             while True:
                 await ws.receive_text()  # ignore inbound; keep the socket open
         except WebSocketDisconnect:
             pass
         finally:
-            await app.state.ws.unsubscribe(experiment_id, ws)
+            await ctx.ws.unsubscribe(channel, ws)
 
-    # Prefer a built React app if present; otherwise serve the bundled single-file UI.
-    if os.path.isdir(_FRONTEND_DIST):
-        app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="assets")
+    @app.websocket("/ws/experiments/{experiment_id}")
+    async def ws_experiment(ws: WebSocket, experiment_id: str) -> None:
+        await _ws(ws, experiment_id)
+
+    @app.websocket("/ws/benchmarks/{benchmark_id}")
+    async def ws_benchmark(ws: WebSocket, benchmark_id: str) -> None:
+        await _ws(ws, benchmark_id)
+
+    ui = _ui_dir()
+    if ui is not None:
+        assets = os.path.join(ui, "assets")
+        if os.path.isdir(assets):
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
         @app.get("/", response_class=HTMLResponse)
         def index_built() -> FileResponse:
-            return FileResponse(os.path.join(_FRONTEND_DIST, "index.html"))
+            return FileResponse(os.path.join(ui, "index.html"))
     else:
 
         @app.get("/", response_class=HTMLResponse)

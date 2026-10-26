@@ -1,8 +1,8 @@
 """algops.notify — deterministic completion notifications (Slack / email / console).
 
-The "experiment finished" alert must NOT route through the LLM (it might forget or
-hallucinate). It is fired deterministically from the finalize step, deduped by experiment,
-and degrades to a console log when no channel is configured.
+The "experiment finished" / "benchmark finished" alerts must NOT route through the LLM (it might
+forget or hallucinate). They are fired deterministically, deduped per experiment attempt /
+benchmark, and degrade to a console log when no channel is configured.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from email.mime.text import MIMEText
 from typing import Any
 
-from algops.core import GoalDirection, MasterSettings, Metrics, MetricName
+from algops.core import GoalDirection, MasterSettings, MetricName, Objective, normalize_metrics
 
 # In-process dedup guard (the durable guard is FinalResult.notified in the tracking DB).
 _SENT: set[str] = set()
@@ -112,29 +112,44 @@ def format_completion_message(
     goal_text: str,
     stop_reason: str | None,
     optimal_params: dict[str, Any],
-    metrics: Metrics | None,
+    metrics: Any,
     target_metric: MetricName | str,
-    target_value: float,
+    target_value: float | None,
     direction: GoalDirection | str,
+    objective: Objective | None = None,
+    changed_params: dict[str, Any] | None = None,
+    algorithm_id: str | None = None,
 ) -> tuple[str, str]:
-    tm = MetricName(target_metric).value
-    arrow = "≤" if GoalDirection(direction) is GoalDirection.minimize else "≥"
+    m = normalize_metrics(metrics)
+    tm = target_metric.value if isinstance(target_metric, MetricName) else str(target_metric)
+    obj = objective or Objective(metric=tm, direction=GoalDirection(direction), target=target_value)
     subject = f"실험 완료: {project_name} / {experiment_name}"
     params = ", ".join(f"{k}={v}" for k, v in sorted(optimal_params.items())) or "(없음)"
     body_lines = [
-        f"프로젝트: {project_name}",
+        f"프로젝트: {project_name}" + (f"  (알고리즘 {algorithm_id})" if algorithm_id else ""),
         f"실험: {experiment_name}",
-        f"목표: {goal_text or '-'}  (목표 지표 {tm} {arrow} {target_value})",
+        f"목표: {goal_text or '-'}  ({obj.describe()})",
         f"종료 사유: {stop_reason or '-'}",
         f"최적 파라미터: {params}",
     ]
-    if metrics is not None:
-        body_lines.append(
-            f"성능: {tm}={metrics.get(target_metric):.4f}, "
-            f"precision={metrics.precision:.4f}, recall={metrics.recall:.4f}, "
-            f"f1={metrics.f1:.4f}, fp_rate={metrics.fp_rate:.4f}, fn_rate={metrics.fn_rate:.4f}"
-        )
+    if changed_params:
+        body_lines.append("기본값 대비 변경: " + ", ".join(
+            f"{k} {c.get('old')}→{c.get('new')}" for k, c in changed_params.items()))
+    if m:
+        shown = [obj.metric, *[c.metric for c in obj.constraints]]
+        shown += [n for n in ("precision", "recall", "f1", "fp_rate", "fn_rate") if n not in shown]
+        body_lines.append("성능: " + ", ".join(f"{n}={m[n]:.4f}" for n in shown if n in m))
     return subject, "\n".join(body_lines)
+
+
+def _send_all(settings: MasterSettings, subject: str, body: str) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    for notifier in build_notifiers(settings):
+        try:
+            refs[notifier.name] = notifier.send(subject, body)
+        except Exception as exc:  # notification failure must never crash a workflow
+            refs[notifier.name] = f"error:{exc}"
+    return refs
 
 
 def notify_experiment_complete(
@@ -146,10 +161,13 @@ def notify_experiment_complete(
     goal_text: str,
     stop_reason: str | None,
     optimal_params: dict[str, Any],
-    metrics: Metrics | None,
+    metrics: Any,
     target_metric: MetricName | str,
-    target_value: float,
+    target_value: float | None,
     direction: GoalDirection | str,
+    objective: Objective | None = None,
+    changed_params: dict[str, Any] | None = None,
+    algorithm_id: str | None = None,
 ) -> dict[str, str]:
     """Fire the completion alert once. Returns {notifier_name: ref}. Idempotent per dedup_key."""
     if dedup_key in _SENT:
@@ -164,13 +182,37 @@ def notify_experiment_complete(
         target_metric=target_metric,
         target_value=target_value,
         direction=direction,
+        objective=objective,
+        changed_params=changed_params,
+        algorithm_id=algorithm_id,
     )
-    refs: dict[str, str] = {}
-    for notifier in build_notifiers(settings):
-        try:
-            refs[notifier.name] = notifier.send(subject, body)
-        except Exception as exc:  # notification failure must never crash the loop
-            refs[notifier.name] = f"error:{exc}"
+    refs = _send_all(settings, subject, body)
+    _SENT.add(dedup_key)
+    return refs
+
+
+def format_benchmark_message(*, name: str, status: str, summary: dict[str, int],
+                             failing: list[dict[str, Any]], url: str | None = None) -> tuple[str, str]:
+    icon = "✅" if status == "passed" else "❌"
+    subject = f"{icon} 벤치마크 {status}: {name}"
+    counts = ", ".join(f"{k}={v}" for k, v in summary.items() if v) or "셀 없음"
+    lines = [f"벤치마크: {name}", f"결과: {counts}"]
+    for cell in failing[:20]:
+        lines.append(f"- [{cell.get('verdict')}] {cell.get('project')}/{cell.get('algorithm_id')}"
+                     f"@{cell.get('suite_id')}: {cell.get('detail', '')}")
+    if len(failing) > 20:
+        lines.append(f"... 외 {len(failing) - 20}건")
+    if url:
+        lines.append(url)
+    return subject, "\n".join(lines)
+
+
+def notify_benchmark_complete(settings: MasterSettings, *, dedup_key: str, name: str, status: str,
+                              summary: dict[str, int], failing: list[dict[str, Any]]) -> dict[str, str]:
+    if dedup_key in _SENT:
+        return {"deduped": dedup_key}
+    subject, body = format_benchmark_message(name=name, status=status, summary=summary, failing=failing)
+    refs = _send_all(settings, subject, body)
     _SENT.add(dedup_key)
     return refs
 
@@ -183,4 +225,6 @@ __all__ = [
     "build_notifiers",
     "format_completion_message",
     "notify_experiment_complete",
+    "format_benchmark_message",
+    "notify_benchmark_complete",
 ]

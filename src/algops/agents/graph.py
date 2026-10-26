@@ -1,6 +1,6 @@
 """Assemble the experiment-loop StateGraph (plan §4).
 
-Linear chain + one conditional edge out of ``pm_decide``. ``pm_decide`` is the *only* node
+Linear chain + one conditional edge out of ``pm_decide`` (continue | validate → finalize). ``pm_decide`` is the *only* node
 with conditional edges; every other node uses plain edges (never mix the two on one node).
 """
 
@@ -33,8 +33,9 @@ def build_graph(deps: LoopDeps, checkpointer=None):
     graph.add_conditional_edges(
         "pm_decide",
         route_after_pm,
-        {"continue": "rag_retrieve", "finalize": "finalize"},
+        {"continue": "rag_retrieve", "finalize": "validate"},
     )
+    graph.add_edge("validate", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile(checkpointer=checkpointer)
 

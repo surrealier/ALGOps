@@ -7,8 +7,40 @@ M0 does not call the LLM, but the struct is fixed now so M1 only flips a flag.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated, Any
+
+from pydantic import BaseModel, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _split_csv(v: Any) -> Any:
+    """Accept JSON lists *or* comma-separated strings for list-valued env vars."""
+    if isinstance(v, str):
+        text = v.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            return json.loads(text)
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return v
+
+
+def _parse_mapping(v: Any) -> Any:
+    """``name=path;name2=path2`` or a JSON object."""
+    if isinstance(v, str):
+        text = v.strip()
+        if not text:
+            return {}
+        if text.startswith("{"):
+            return json.loads(text)
+        out: dict[str, str] = {}
+        for part in text.split(";"):
+            if "=" in part:
+                name, path = part.split("=", 1)
+                out[name.strip()] = path.strip()
+        return out
+    return v
 
 
 class LLMConfig(BaseModel):
@@ -56,6 +88,23 @@ class MasterSettings(BaseSettings):
     # Default LLM endpoint (unused in M0).
     llm: LLMConfig = LLMConfig()
 
+    # --- v2: API auth, dispatch, benchmarks, triggers, promotion ---
+    # When set, every mutating /api/v1 endpoint (except the slave protocol) needs
+    # `Authorization: Bearer <api_token>` (CI, schedulers, the UI after login).
+    api_token: str | None = None
+    run_retries: int = 1  # re-dispatch a run to another runner on infra failure/timeout
+    benchmark_max_parallel: int = 0  # 0 => total online runner concurrency
+    benchmark_rel_tolerance: float | None = None  # override every algorithm's regression tolerance
+    scheduler_enabled: bool = True  # cron + git-watch loop in this process (enable on ONE master)
+    scheduler_tick_s: float = 20.0
+    sync_timeout_s: float = 300.0
+    # Promotion = propose the campaign's best params as a branch commit on the repo.
+    promote_push: bool = False  # push the branch to the runner's `origin`
+    promote_branch_prefix: str = "algops/"
+    git_provider: str | None = None  # github | gitlab (PR creation from the master)
+    git_provider_token: str | None = None
+    git_provider_api_url: str | None = None  # e.g. https://gitlab.corp/api/v4 (defaults per provider)
+
     # RAG (M3). Dev default = in-memory; prod = Qdrant + Neo4j.
     rag_backend: str = "memory"  # memory | qdrant_neo4j
     rag_top_k: int = 5
@@ -81,6 +130,8 @@ class MasterSettings(BaseSettings):
 
 
 class SlaveSettings(BaseSettings):
+    """A runner ("slave"): executes runs for any number of repositories, outbound-only."""
+
     model_config = SettingsConfigDict(env_prefix="ALGOPS_SLAVE_", extra="ignore")
 
     host: str = "127.0.0.1"
@@ -89,14 +140,39 @@ class SlaveSettings(BaseSettings):
     master_url: str = "http://127.0.0.1:8000"
     enroll_token: str = "dev-enroll-token"
 
-    project_name: str = "toy-project"
+    project_name: str = "toy-project"  # name for `project_path` (v1 single-project mode)
     modality: str = "tabular"
     host_label: str = "dev-pc"
 
-    # Path to the externalized project (mounted volume in prod). Defaults to the bundled toy.
+    # v1: one externalized project at a local path. Empty => the bundled toy (if serve_toy).
     project_path: str | None = None
+    # v2: more local projects, "name=/path;name2=/path2" or JSON {"name": "/path"}.
+    local_projects: Annotated[dict[str, str], NoDecode] = {}
+    serve_toy: bool = True  # serve the bundled toy detector when no local project is set
+
+    # Capabilities used by the master's dispatcher.
+    labels: Annotated[list[str], NoDecode] = []  # e.g. "gpu,cuda12,linux"
+    concurrency: int = 1  # runs executed in parallel on this host
+    allow_projects: Annotated[list[str] | None, NoDecode] = None  # project names (None => any)
+    git: bool = True  # clone/checkout git projects
 
     # Long-poll + heartbeat cadence.
     poll_timeout_s: float = 25.0
     heartbeat_interval_s: float = 10.0
     work_dir: str = "./.algops/slave_work"
+    keep_checkouts: int = 20  # per project; oldest worktrees are pruned beyond this
+
+    # Promotion commits.
+    git_author_name: str = "ALGOps"
+    git_author_email: str = "algops@localhost"
+    push_remote: str = "origin"
+
+    @field_validator("labels", "allow_projects", mode="before")
+    @classmethod
+    def _lists(cls, v: Any) -> Any:
+        return _split_csv(v)
+
+    @field_validator("local_projects", mode="before")
+    @classmethod
+    def _mapping(cls, v: Any) -> Any:
+        return _parse_mapping(v)

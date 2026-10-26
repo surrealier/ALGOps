@@ -1,0 +1,42 @@
+# ALGOps contract v2 — one repository, N algorithms × M test suites.
+# Docs: AGENTS.md (in this repo after `algops init`) · validate with `algops validate`,
+# run one cell with `algops run -a {algo} -s smoke`, everything with `algops test`.
+algops: 2
+name: {name}
+
+env:
+  # Run once per commit before the first run (cached by the runner). Examples:
+  #   - uv sync            - pip install -r requirements.txt            - make build
+  setup: []
+  # python: .venv/bin/python      # interpreter for `python:` entrypoints (default: the runner's)
+  vars: {{}}
+
+suites:
+  - id: smoke
+    uri: data/smoke                # repo-relative path, absolute path, "${{DATASETS}}/x", or scheme://
+    tags: [fast]
+  # - id: full
+  #   uri: "${{DATASETS}}/{name}/full"
+
+algorithms:
+  - id: {algo}
+    description: TODO — what this algorithm decides
+    params: algops/{algo}/params.yaml
+    entrypoint:
+{entrypoint}
+    metrics:
+      presets: [binary]            # tp/fp/fn/tn -> precision, recall, f1, accuracy, fp_rate, fn_rate
+      declare:
+        - {{ name: latency_ms, direction: minimize, unit: ms }}
+    gates:                         # absolute pass/fail in every benchmark
+      - {{ metric: recall, op: ">=", value: 0.5 }}
+    regression:                    # vs the previous benchmark of the same cell
+      rel_tolerance: 0.02
+    objective:                     # default campaign goal (overridable per campaign)
+      metric: fp_rate
+      target: 0.05
+      constraints:
+        - {{ metric: recall, op: ">=", value: 0.5 }}
+    timeout_s: 900
+    # runs_on: [gpu]               # runner labels required
+    # suites: [smoke]              # default: every suite

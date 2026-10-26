@@ -1,7 +1,7 @@
 [project]
 name = "algops"
-version = "0.0.0"
-description = "ALGOps — RAG-based MLOps for optimizing post-processing algorithm parameters (M0 walking skeleton)"
+version = "0.2.0"
+description = "ALGOps — test, benchmark and tune the algorithms of any repository (language-agnostic runners + LLM/RAG optimization)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -28,6 +28,8 @@ dependencies = [
     # task runtime (broker only needed in prod; dev uses BackgroundTasks)
     "celery>=5.3",
     "redis>=5.0",
+    "ruamel-yaml>=0.18",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +61,7 @@ mcp = [
 ]
 
 [project.scripts]
+algops = "algops.cli:main"
 algops-master = "algops.master.__main__:main"
 algops-slave = "algops.slave.__main__:main"
 algops-smoke = "algops.smoke:main"
@@ -75,6 +78,7 @@ packages = ["src/algops"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/algops/toy_project/params.yaml" = "algops/toy_project/params.yaml"
+"src/algops/toy_project/algops.yaml" = "algops/toy_project/algops.yaml"
 "src/algops/master/static" = "algops/master/static"
 "src/algops/contract/bundle" = "algops/contract/bundle"
 

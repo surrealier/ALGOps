@@ -23,8 +23,11 @@ def materialize_bundle(target_root: str) -> list[str]:
     tdir = os.path.join(target_root, "algops", "_templates")
     os.makedirs(tdir, exist_ok=True)
     for name in os.listdir(os.path.join(_BUNDLE, "templates")):
+        src = os.path.join(_BUNDLE, "templates", name)
+        if not os.path.isfile(src):
+            continue  # templates/v2 is used by `algops init`
         dst = os.path.join(tdir, name)
-        shutil.copyfile(os.path.join(_BUNDLE, "templates", name), dst)
+        shutil.copyfile(src, dst)
         written.append(dst)
     return written
 
