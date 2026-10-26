@@ -489,12 +489,11 @@ def get_benchmark(s: Session, benchmark_id: str) -> Benchmark | None:
 
 
 def list_benchmarks(s: Session, limit: int = 50, project_id: str | None = None) -> list[Benchmark]:
-    stmt = select(Benchmark).order_by(Benchmark.created_at.desc()).limit(limit)
-    rows = list(s.scalars(stmt))
+    stmt = select(Benchmark).order_by(Benchmark.created_at.desc())
     if project_id:
-        rows = [b for b in rows if project_id in (b.revisions or {})
-                or any(sc.get("project_id") == project_id for sc in (b.scope or []))]
-    return rows
+        involved = select(BenchmarkCell.benchmark_id).where(BenchmarkCell.project_id == project_id).distinct()
+        stmt = stmt.where(Benchmark.benchmark_id.in_(involved))
+    return list(s.scalars(stmt.limit(limit)))
 
 
 def add_cell(s: Session, *, benchmark_id: str, project_id: str, algorithm_id: str, suite_id: str,

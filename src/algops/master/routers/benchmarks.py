@@ -39,6 +39,11 @@ async def create_benchmark(body: BenchmarkCreate, ctx: MasterContext = Depends(g
 @router.get("", response_model=list[BenchmarkOut])
 def list_benchmarks(limit: int = 50, project_id: str | None = None) -> list[BenchmarkOut]:
     with get_session() as s:
+        if project_id:
+            proj = repo.find_project(s, project_id)  # id or name
+            if proj is None:
+                return []
+            project_id = proj.project_id
         return [benchmark_out(b) for b in repo.list_benchmarks(s, limit, project_id)]
 
 

@@ -46,4 +46,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
-      - run: npm run build
+      - run: npm run build   # typecheck + build into src/algops/master/static/ui
+      - name: Committed UI build is up to date
+        working-directory: .
+        run: git diff --exit-code --stat -- src/algops/master/static/ui || (echo "::error::run 'cd frontend && npm run build' and commit src/algops/master/static/ui" && exit 1)

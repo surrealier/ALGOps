@@ -1,7 +1,7 @@
-# One-command local demo: master + one toy slave on the same Docker network.
+# One-command local demo: master + one runner (serving the bundled toy project) on one network.
 #
 #   docker compose -f deploy/docker-compose.dev.yml up --build
-#   # then open http://localhost:8000  ->  toy-project appears online  ->  create + run an experiment
+#   # open http://localhost:8000 -> 벤치마크 실행, or register any git repo under 프로젝트
 
 services:
   master:
@@ -19,7 +19,7 @@ services:
     volumes:
       - algops_dev:/data
 
-  slave:
+  runner:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.slave
@@ -28,6 +28,7 @@ services:
       ALGOPS_SLAVE_MASTER_URL: "http://master:8000"
       ALGOPS_SLAVE_ENROLL_TOKEN: "dev-enroll-token"
       ALGOPS_SLAVE_PROJECT_NAME: "toy-project"
+      ALGOPS_SLAVE_CONCURRENCY: "2"
 
 volumes:
   algops_dev: {}

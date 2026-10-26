@@ -19,17 +19,12 @@ from .context import build_context
 from .routers import artifacts, benchmarks, experiments, llm, projects, runs, schedules, slaves
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-_FRONTEND_DIST = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "dist")
-)
 
 
 def _ui_dir() -> str | None:
-    """A built React UI: ``frontend/dist`` (dev checkout / Docker) or the packaged copy."""
-    for d in (_FRONTEND_DIST, os.path.join(_STATIC_DIR, "ui")):
-        if os.path.isfile(os.path.join(d, "index.html")):
-            return d
-    return None
+    """The React UI built into the package (``cd frontend && npm run build``)."""
+    d = os.environ.get("ALGOPS_MASTER_UI_DIR") or os.path.join(_STATIC_DIR, "ui")
+    return d if os.path.isfile(os.path.join(d, "index.html")) else None
 
 
 def create_app(settings: MasterSettings | None = None) -> FastAPI:

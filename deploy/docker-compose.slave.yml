@@ -1,26 +1,37 @@
-# ALGOps SLAVE — one per project, on a developer PC (B/C/D...). Outbound HTTP only.
+# ALGOps RUNNER — on any machine that should execute algorithm runs (dev PCs, GPU boxes, CI hosts).
+# Outbound HTTP to the master only — no inbound ports. One runner serves many repositories.
 #
-#   ALGOPS_MASTER_URL=http://<A_IP>:8000 ALGOPS_PROJECT_NAME=proj-A \
+#   ALGOPS_MASTER_URL=http://<A_IP>:8000 ALGOPS_ENROLL_TOKEN=<secret> \
+#   ALGOPS_RUNNER_LABELS=gpu,cuda12 ALGOPS_RUNNER_CONCURRENCY=2 \
 #     docker compose -f deploy/docker-compose.slave.yml up -d
 #
-# Set ALGOPS_PROJECT_DIR to your externalized project (M4); leave unset to use the bundled
-# toy detector (M0). The slave needs only OUTBOUND access to the master — no inbound ports.
+# Private git repos: the runner uses ~/.ssh (mounted read-only) or a credential helper.
+# Datasets: mount them and reference them from algops.yaml suites as "${DATASETS}/...".
 
 services:
-  slave:
+  runner:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.slave
-    image: algops/slave:0.0.0
+    image: algops/slave:0.2.0
     environment:
       ALGOPS_SLAVE_MASTER_URL: "${ALGOPS_MASTER_URL:-http://host.docker.internal:8000}"
       ALGOPS_SLAVE_ENROLL_TOKEN: "${ALGOPS_ENROLL_TOKEN:-dev-enroll-token}"
-      ALGOPS_SLAVE_PROJECT_NAME: "${ALGOPS_PROJECT_NAME:-toy-project}"
-      ALGOPS_SLAVE_HOST_LABEL: "${HOSTNAME:-dev-pc}"
-      # Set to /workspace/project once the project is externalized (M4); empty => bundled toy.
-      ALGOPS_SLAVE_PROJECT_PATH: "${ALGOPS_SLAVE_PROJECT_PATH:-}"
+      ALGOPS_SLAVE_HOST_LABEL: "${HOSTNAME:-runner}"
+      ALGOPS_SLAVE_LABELS: "${ALGOPS_RUNNER_LABELS:-cpu}"
+      ALGOPS_SLAVE_CONCURRENCY: "${ALGOPS_RUNNER_CONCURRENCY:-1}"
+      ALGOPS_SLAVE_SERVE_TOY: "${ALGOPS_SERVE_TOY:-false}"
+      # Optional local (non-git) project mounted at /workspace/project:
+      ALGOPS_SLAVE_LOCAL_PROJECTS: "${ALGOPS_LOCAL_PROJECTS:-}"
+      DATASETS: "/datasets"
     volumes:
-      - "${ALGOPS_PROJECT_DIR:-./.placeholder}:/workspace/project:rw"
+      - "runner_work:/work"
+      - "${HOME}/.ssh:/root/.ssh:ro"
+      - "${ALGOPS_DATASETS_DIR:-./.placeholder-datasets}:/datasets:ro"
+      - "${ALGOPS_PROJECT_DIR:-./.placeholder-project}:/workspace/project:rw"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+volumes:
+  runner_work: {}

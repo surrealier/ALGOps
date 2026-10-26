@@ -134,6 +134,11 @@ async def create_experiment(body: ExperimentCreate, ctx: MasterContext = Depends
 @router.get("", response_model=list[ExperimentOut])
 def list_experiments(project_id: str | None = None) -> list[ExperimentOut]:
     with get_session() as s:
+        if project_id:
+            proj = repo.find_project(s, project_id)  # id or name
+            if proj is None:
+                return []
+            project_id = proj.project_id
         return [_to_out(e) for e in repo.list_experiments(s, project_id)]
 
 
